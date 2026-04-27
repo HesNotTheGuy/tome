@@ -1,0 +1,26 @@
+# Normalize line endings on commit; check out with platform defaults.
+* text=auto eol=lf
+
+# Force LF for source files regardless of platform.
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+
+# Binary files
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.ico       binary
+*.icns      binary
+*.bz2       binary
+*.zst       binary
+*.zim       binary

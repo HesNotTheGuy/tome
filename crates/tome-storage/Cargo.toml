@@ -1,0 +1,20 @@
+[package]
+name = "tome-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tiered article storage (Hot / Warm / Cold / Evicted) for Tome."
+
+[dependencies]
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+rusqlite = { workspace = true }
+zstd = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

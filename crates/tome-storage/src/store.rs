@@ -1,0 +1,570 @@
+//! `ArticleStore` trait and SQLite-backed implementation.
+
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rusqlite::{Connection, OptionalExtension, params};
+use tome_core::{Result, Tier, Title, TomeError};
+
+use crate::article::{ArticleContent, ArticleMetadata, ArticleRecord};
+use crate::{compression, schema};
+
+/// Storage abstraction over the tiered article store.
+///
+/// Implementations are free to use any backing store (a real SQLite file, an
+/// in-memory database, a mock for tests). Higher layers depend only on this
+/// trait so they can be tested with stand-ins.
+pub trait ArticleStore: Send + Sync {
+    fn upsert_metadata(&self, m: &ArticleMetadata) -> Result<()>;
+    fn lookup(&self, title: &Title) -> Result<Option<ArticleRecord>>;
+    fn get_content(&self, page_id: u64) -> Result<Option<ArticleContent>>;
+    /// Move an article to a new tier.
+    ///
+    /// - `Hot` and `Warm` require `content`.
+    /// - `Cold` and `Evicted` ignore `content`; any previously stored content
+    ///   for this page is dropped.
+    /// - `Cold` requires the article's metadata to already record
+    ///   `stream_offset` (set this via `upsert_metadata` first).
+    fn set_tier(&self, page_id: u64, tier: Tier, content: Option<&str>) -> Result<()>;
+    fn pin(&self, page_id: u64, pinned: bool) -> Result<()>;
+    fn touch(&self, page_id: u64) -> Result<()>;
+    fn count_by_tier(&self, tier: Tier) -> Result<u64>;
+    /// Up to `n` non-pinned Hot/Warm article ids ordered by least-recently
+    /// accessed first. Used by the demotion policy in higher layers.
+    fn lru_candidates(&self, n: u32) -> Result<Vec<u64>>;
+}
+
+pub struct SqliteArticleStore {
+    conn: Mutex<Connection>,
+}
+
+impl SqliteArticleStore {
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)
+            .map_err(|e| TomeError::Storage(format!("open sqlite at {path:?}: {e}")))?;
+        Self::init(conn)
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| TomeError::Storage(format!("open in-memory sqlite: {e}")))?;
+        Self::init(conn)
+    }
+
+    fn init(conn: Connection) -> Result<Self> {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| TomeError::Storage(format!("enable foreign keys: {e}")))?;
+        schema::migrate(&conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| TomeError::Storage(format!("connection mutex poisoned: {e}")))
+    }
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn parse_tier(s: &str) -> Result<Tier> {
+    match s {
+        "hot" => Ok(Tier::Hot),
+        "warm" => Ok(Tier::Warm),
+        "cold" => Ok(Tier::Cold),
+        "evicted" => Ok(Tier::Evicted),
+        other => Err(TomeError::Storage(format!("unknown tier: {other}"))),
+    }
+}
+
+impl ArticleStore for SqliteArticleStore {
+    fn upsert_metadata(&self, m: &ArticleMetadata) -> Result<()> {
+        let conn = self.lock()?;
+        let now_ts = now_secs();
+        conn.execute(
+            "INSERT INTO articles
+                (page_id, title, tier, pinned, stream_offset, stream_length,
+                 revision_id, last_accessed, access_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8, ?8)
+             ON CONFLICT(page_id) DO UPDATE SET
+                title         = excluded.title,
+                tier          = excluded.tier,
+                pinned        = excluded.pinned,
+                stream_offset = excluded.stream_offset,
+                stream_length = excluded.stream_length,
+                revision_id   = excluded.revision_id,
+                updated_at    = excluded.updated_at",
+            params![
+                m.page_id as i64,
+                m.title,
+                m.tier.as_str(),
+                m.pinned as i32,
+                m.stream_offset.map(|v| v as i64),
+                m.stream_length.map(|v| v as i64),
+                m.revision_id.map(|v| v as i64),
+                now_ts,
+            ],
+        )
+        .map_err(|e| TomeError::Storage(format!("upsert metadata: {e}")))?;
+        Ok(())
+    }
+
+    fn lookup(&self, title: &Title) -> Result<Option<ArticleRecord>> {
+        let conn = self.lock()?;
+        let row = conn
+            .query_row(
+                "SELECT page_id, title, tier, pinned, stream_offset, stream_length,
+                        revision_id, last_accessed, access_count
+                 FROM articles WHERE title = ?1",
+                params![title.as_str()],
+                |row| {
+                    let page_id: i64 = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let tier_str: String = row.get(2)?;
+                    let pinned: i32 = row.get(3)?;
+                    let stream_offset: Option<i64> = row.get(4)?;
+                    let stream_length: Option<i64> = row.get(5)?;
+                    let revision_id: Option<i64> = row.get(6)?;
+                    let last_accessed: i64 = row.get(7)?;
+                    let access_count: i64 = row.get(8)?;
+                    Ok((
+                        page_id,
+                        title,
+                        tier_str,
+                        pinned,
+                        stream_offset,
+                        stream_length,
+                        revision_id,
+                        last_accessed,
+                        access_count,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| TomeError::Storage(format!("lookup: {e}")))?;
+
+        match row {
+            None => Ok(None),
+            Some((page_id, title, tier_str, pinned, off, len, rev, last, count)) => {
+                Ok(Some(ArticleRecord {
+                    metadata: ArticleMetadata {
+                        page_id: page_id as u64,
+                        title,
+                        tier: parse_tier(&tier_str)?,
+                        pinned: pinned != 0,
+                        stream_offset: off.map(|v| v as u64),
+                        stream_length: len.map(|v| v as u64),
+                        revision_id: rev.map(|v| v as u64),
+                    },
+                    last_accessed: last,
+                    access_count: count as u64,
+                }))
+            }
+        }
+    }
+
+    fn get_content(&self, page_id: u64) -> Result<Option<ArticleContent>> {
+        let conn = self.lock()?;
+        let row: Option<(String, Option<i64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT tier, stream_offset, stream_length FROM articles WHERE page_id = ?1",
+                params![page_id as i64],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| TomeError::Storage(format!("get_content metadata: {e}")))?;
+
+        let Some((tier_str, off, len)) = row else {
+            return Ok(None);
+        };
+        let tier = parse_tier(&tier_str)?;
+        match tier {
+            Tier::Hot => {
+                let txt: String = conn
+                    .query_row(
+                        "SELECT wikitext FROM hot_content WHERE page_id = ?1",
+                        params![page_id as i64],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| TomeError::Storage(format!("read hot: {e}")))?;
+                Ok(Some(ArticleContent::Hot(txt)))
+            }
+            Tier::Warm => {
+                let blob: Vec<u8> = conn
+                    .query_row(
+                        "SELECT wikitext_zstd FROM warm_content WHERE page_id = ?1",
+                        params![page_id as i64],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| TomeError::Storage(format!("read warm: {e}")))?;
+                let bytes = compression::decompress(&blob)?;
+                let txt = String::from_utf8(bytes)
+                    .map_err(|e| TomeError::Storage(format!("warm not utf-8: {e}")))?;
+                Ok(Some(ArticleContent::Warm(txt)))
+            }
+            Tier::Cold => match off {
+                Some(o) => Ok(Some(ArticleContent::Cold {
+                    stream_offset: o as u64,
+                    stream_length: len.map(|v| v as u64),
+                })),
+                None => Err(TomeError::Storage(format!(
+                    "cold article {page_id} has no stream_offset"
+                ))),
+            },
+            Tier::Evicted => Ok(Some(ArticleContent::Evicted)),
+        }
+    }
+
+    fn set_tier(&self, page_id: u64, tier: Tier, content: Option<&str>) -> Result<()> {
+        if matches!(tier, Tier::Hot | Tier::Warm) && content.is_none() {
+            return Err(TomeError::Storage(format!(
+                "tier {} requires content",
+                tier.as_str()
+            )));
+        }
+        if matches!(tier, Tier::Cold) {
+            // Cold requires stream_offset to already be recorded.
+            let conn = self.lock()?;
+            let off: Option<i64> = conn
+                .query_row(
+                    "SELECT stream_offset FROM articles WHERE page_id = ?1",
+                    params![page_id as i64],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| TomeError::Storage(format!("check cold offset: {e}")))?
+                .flatten();
+            if off.is_none() {
+                return Err(TomeError::Storage(format!(
+                    "page {page_id} cannot become Cold without stream_offset"
+                )));
+            }
+        }
+
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin tx: {e}")))?;
+
+        // Update the metadata first so we surface NotFound before doing any
+        // content work. INSERTs into the content tables would otherwise fail
+        // on the foreign-key constraint and mask the real diagnosis.
+        let updated = tx
+            .execute(
+                "UPDATE articles SET tier = ?1, updated_at = ?2 WHERE page_id = ?3",
+                params![tier.as_str(), now_secs(), page_id as i64],
+            )
+            .map_err(|e| TomeError::Storage(format!("update tier: {e}")))?;
+        if updated == 0 {
+            return Err(TomeError::NotFound(format!("page_id {page_id}")));
+        }
+
+        // Drop any previously stored content; re-add below if needed.
+        tx.execute(
+            "DELETE FROM hot_content WHERE page_id = ?1",
+            params![page_id as i64],
+        )
+        .map_err(|e| TomeError::Storage(format!("clear hot: {e}")))?;
+        tx.execute(
+            "DELETE FROM warm_content WHERE page_id = ?1",
+            params![page_id as i64],
+        )
+        .map_err(|e| TomeError::Storage(format!("clear warm: {e}")))?;
+
+        match (tier, content) {
+            (Tier::Hot, Some(c)) => {
+                tx.execute(
+                    "INSERT INTO hot_content (page_id, wikitext) VALUES (?1, ?2)",
+                    params![page_id as i64, c],
+                )
+                .map_err(|e| TomeError::Storage(format!("insert hot: {e}")))?;
+            }
+            (Tier::Warm, Some(c)) => {
+                let compressed = compression::compress(c.as_bytes(), compression::DEFAULT_LEVEL)?;
+                tx.execute(
+                    "INSERT INTO warm_content (page_id, wikitext_zstd) VALUES (?1, ?2)",
+                    params![page_id as i64, compressed],
+                )
+                .map_err(|e| TomeError::Storage(format!("insert warm: {e}")))?;
+            }
+            _ => {}
+        }
+
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit set_tier: {e}")))?;
+        Ok(())
+    }
+
+    fn pin(&self, page_id: u64, pinned: bool) -> Result<()> {
+        let conn = self.lock()?;
+        let updated = conn
+            .execute(
+                "UPDATE articles SET pinned = ?1, updated_at = ?2 WHERE page_id = ?3",
+                params![pinned as i32, now_secs(), page_id as i64],
+            )
+            .map_err(|e| TomeError::Storage(format!("pin: {e}")))?;
+        if updated == 0 {
+            return Err(TomeError::NotFound(format!("page_id {page_id}")));
+        }
+        Ok(())
+    }
+
+    fn touch(&self, page_id: u64) -> Result<()> {
+        let conn = self.lock()?;
+        let updated = conn
+            .execute(
+                "UPDATE articles
+                    SET last_accessed = ?1, access_count = access_count + 1
+                  WHERE page_id = ?2",
+                params![now_secs(), page_id as i64],
+            )
+            .map_err(|e| TomeError::Storage(format!("touch: {e}")))?;
+        if updated == 0 {
+            return Err(TomeError::NotFound(format!("page_id {page_id}")));
+        }
+        Ok(())
+    }
+
+    fn count_by_tier(&self, tier: Tier) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM articles WHERE tier = ?1",
+                params![tier.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|e| TomeError::Storage(format!("count tier: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn lru_candidates(&self, n: u32) -> Result<Vec<u64>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT page_id FROM articles
+                  WHERE tier IN ('hot','warm') AND pinned = 0
+                  ORDER BY last_accessed ASC, access_count ASC, page_id ASC
+                  LIMIT ?1",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare lru: {e}")))?;
+        let rows = stmt
+            .query_map(params![n as i64], |row| row.get::<_, i64>(0))
+            .map_err(|e| TomeError::Storage(format!("query lru: {e}")))?;
+        let ids: rusqlite::Result<Vec<i64>> = rows.collect();
+        Ok(ids
+            .map_err(|e| TomeError::Storage(format!("collect lru: {e}")))?
+            .into_iter()
+            .map(|v| v as u64)
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta(page_id: u64, title: &str, tier: Tier) -> ArticleMetadata {
+        ArticleMetadata {
+            page_id,
+            title: title.into(),
+            tier,
+            pinned: false,
+            stream_offset: None,
+            stream_length: None,
+            revision_id: None,
+        }
+    }
+
+    fn cold_meta(page_id: u64, title: &str, offset: u64) -> ArticleMetadata {
+        ArticleMetadata {
+            page_id,
+            title: title.into(),
+            tier: Tier::Cold,
+            pinned: false,
+            stream_offset: Some(offset),
+            stream_length: Some(1024),
+            revision_id: Some(1),
+        }
+    }
+
+    #[test]
+    fn upsert_then_lookup() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .upsert_metadata(&cold_meta(42, "Photon", 1_000))
+            .unwrap();
+        let rec = store
+            .lookup(&Title::new("Photon"))
+            .unwrap()
+            .expect("photon present");
+        assert_eq!(rec.metadata.page_id, 42);
+        assert_eq!(rec.metadata.tier, Tier::Cold);
+        assert_eq!(rec.metadata.stream_offset, Some(1_000));
+        assert_eq!(rec.metadata.stream_length, Some(1024));
+        assert_eq!(rec.metadata.revision_id, Some(1));
+        assert_eq!(rec.access_count, 0);
+    }
+
+    #[test]
+    fn lookup_normalizes_title_underscores() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .upsert_metadata(&cold_meta(1, "Higgs boson", 1))
+            .unwrap();
+        // Title::new converts underscores to spaces; this is the tome-core
+        // normalization contract.
+        let rec = store
+            .lookup(&Title::new("Higgs_boson"))
+            .unwrap()
+            .expect("found via underscore form");
+        assert_eq!(rec.metadata.page_id, 1);
+    }
+
+    #[test]
+    fn lookup_missing_returns_none() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        assert!(store.lookup(&Title::new("Nonexistent")).unwrap().is_none());
+    }
+
+    #[test]
+    fn promote_cold_to_hot_then_demote_to_warm_then_cold() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "Photon", 100)).unwrap();
+
+        // Cold -> Hot: content delivered from caller.
+        store.set_tier(1, Tier::Hot, Some("photon body")).unwrap();
+        match store.get_content(1).unwrap().unwrap() {
+            ArticleContent::Hot(txt) => assert_eq!(txt, "photon body"),
+            other => panic!("expected Hot, got {other:?}"),
+        }
+
+        // Hot -> Warm: content compressed and decompressed transparently.
+        store.set_tier(1, Tier::Warm, Some("photon body")).unwrap();
+        match store.get_content(1).unwrap().unwrap() {
+            ArticleContent::Warm(txt) => assert_eq!(txt, "photon body"),
+            other => panic!("expected Warm, got {other:?}"),
+        }
+
+        // Warm -> Cold: content dropped, metadata's stream_offset still works.
+        store.set_tier(1, Tier::Cold, None).unwrap();
+        match store.get_content(1).unwrap().unwrap() {
+            ArticleContent::Cold {
+                stream_offset,
+                stream_length,
+            } => {
+                assert_eq!(stream_offset, 100);
+                assert_eq!(stream_length, Some(1024));
+            }
+            other => panic!("expected Cold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tier_hot_without_content_errors() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "X", 1)).unwrap();
+        let err = store.set_tier(1, Tier::Hot, None).unwrap_err();
+        assert!(matches!(err, TomeError::Storage(_)));
+    }
+
+    #[test]
+    fn cold_without_offset_errors() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        // Insert a Hot article with no stream_offset, then try to demote to Cold.
+        store.upsert_metadata(&meta(1, "X", Tier::Hot)).unwrap();
+        store.set_tier(1, Tier::Hot, Some("body")).unwrap();
+        let err = store.set_tier(1, Tier::Cold, None).unwrap_err();
+        assert!(matches!(err, TomeError::Storage(_)));
+    }
+
+    #[test]
+    fn evict_drops_content() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "Photon", 100)).unwrap();
+        store.set_tier(1, Tier::Hot, Some("body")).unwrap();
+        store.set_tier(1, Tier::Evicted, None).unwrap();
+        match store.get_content(1).unwrap().unwrap() {
+            ArticleContent::Evicted => {}
+            other => panic!("expected Evicted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_tier_on_missing_article_errors() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let err = store.set_tier(999, Tier::Hot, Some("x")).unwrap_err();
+        assert!(matches!(err, TomeError::NotFound(_)));
+    }
+
+    #[test]
+    fn touch_increments_count_and_updates_timestamp() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "X", 1)).unwrap();
+        store.touch(1).unwrap();
+        store.touch(1).unwrap();
+        store.touch(1).unwrap();
+        let rec = store.lookup(&Title::new("X")).unwrap().unwrap();
+        assert_eq!(rec.access_count, 3);
+        assert!(rec.last_accessed > 0);
+    }
+
+    #[test]
+    fn pin_blocks_lru_candidates() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        for i in 1..=3 {
+            store
+                .upsert_metadata(&cold_meta(i, &format!("Page{i}"), i * 100))
+                .unwrap();
+            store
+                .set_tier(i, Tier::Hot, Some(&format!("body {i}")))
+                .unwrap();
+            store.touch(i).unwrap();
+        }
+        store.pin(2, true).unwrap();
+        let candidates = store.lru_candidates(10).unwrap();
+        assert!(!candidates.contains(&2));
+        assert!(candidates.contains(&1));
+        assert!(candidates.contains(&3));
+    }
+
+    #[test]
+    fn lru_candidates_orders_by_oldest_access_first() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        for i in 1..=3 {
+            store
+                .upsert_metadata(&cold_meta(i, &format!("Page{i}"), i * 100))
+                .unwrap();
+            store.set_tier(i, Tier::Hot, Some("body")).unwrap();
+        }
+        // Stagger accesses: 1 oldest, 3 newest. We can't sleep in unit tests
+        // realistically, so we update last_accessed directly via touch order
+        // and rely on monotonic-ish wall-clock. Use access_count tiebreaker:
+        store.touch(2).unwrap(); // access_count=1
+        store.touch(2).unwrap(); // access_count=2
+        store.touch(3).unwrap(); // access_count=1
+        // Page 1 has access_count=0; should appear first.
+        let candidates = store.lru_candidates(3).unwrap();
+        assert_eq!(candidates[0], 1, "least-accessed should be first");
+    }
+
+    #[test]
+    fn count_by_tier_distinguishes_tiers() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "Cold1", 1)).unwrap();
+        store.upsert_metadata(&cold_meta(2, "Cold2", 2)).unwrap();
+        store.upsert_metadata(&cold_meta(3, "Hot1", 3)).unwrap();
+        store.set_tier(3, Tier::Hot, Some("hot body")).unwrap();
+        assert_eq!(store.count_by_tier(Tier::Cold).unwrap(), 2);
+        assert_eq!(store.count_by_tier(Tier::Hot).unwrap(), 1);
+        assert_eq!(store.count_by_tier(Tier::Warm).unwrap(), 0);
+        assert_eq!(store.count_by_tier(Tier::Evicted).unwrap(), 0);
+    }
+}

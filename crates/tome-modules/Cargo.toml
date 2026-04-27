@@ -1,0 +1,19 @@
+[package]
+name = "tome-modules"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Module definitions, category resolution, and install/import/export."
+
+[dependencies]
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+tome-storage = { workspace = true }
+tome-api = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }

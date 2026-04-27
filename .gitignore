@@ -1,0 +1,80 @@
+# Rust build artifacts
+target/
+**/target/
+Cargo.lock.bak
+*.pdb
+
+# Node / frontend build artifacts
+node_modules/
+**/node_modules/
+ui/dist/
+.pnpm-store/
+.npm/
+.yarn/
+
+# Tauri generated
+src-tauri/gen/
+src-tauri/target/
+
+# Tantivy local indexes
+tantivy-index/
+**/tantivy-index/
+
+# SQLite working files
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Wikipedia dump artifacts (huge; do not commit)
+*.bz2
+*.xml
+*.xml.bz2
+*-multistream*
+*.zst
+*.zim
+
+# Tome user data dir if dev points it here
+.tome/
+tome-data/
+test-data/
+
+# Logs
+logs/
+*.log
+
+# Environment / secrets (none expected, but defensive)
+.env
+.env.local
+.env.*.local
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+*.lnk
+
+# IDE / editor
+.idea/
+.vscode/
+.fleet/
+.helix/
+.zed/
+*.swp
+*.swo
+*~
+
+# Per-machine assistant settings
+.claude/settings.local.json
+
+# Internal planning notes — kept locally, not committed
+BUILD_SPEC.md
+DECISIONS.md
+
+# Misc
+*.tmp
+*.bak
+*.orig
+coverage/
+.nyc_output/

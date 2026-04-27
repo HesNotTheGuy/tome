@@ -1,0 +1,21 @@
+[package]
+name = "tome-dump"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Reads Wikipedia multistream bz2 dumps without full extraction."
+
+[dependencies]
+tome-core = { workspace = true }
+bzip2 = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+quick-xml = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

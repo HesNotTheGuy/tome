@@ -1,0 +1,25 @@
+[package]
+name = "tome-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "MediaWiki API client. Sole gatekeeper for outbound traffic."
+
+[dependencies]
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+reqwest = { workspace = true }
+governor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }

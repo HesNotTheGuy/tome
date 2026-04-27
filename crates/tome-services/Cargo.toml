@@ -1,0 +1,25 @@
+[package]
+name = "tome-services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Thin orchestration layer; the only thing the UI talks to."
+
+[dependencies]
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+tome-dump = { workspace = true }
+tome-storage = { workspace = true }
+tome-api = { workspace = true }
+tome-search = { workspace = true }
+tome-wikitext = { workspace = true }
+tome-modules = { workspace = true }
+tome-archive = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
