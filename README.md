@@ -47,6 +47,16 @@ Detailed walkthrough lands in this README at the same time the ingestion UI does
 
 Tome's MediaWiki API client enforces a 10 req/s ceiling, exponential backoff with `Retry-After` honored, and a circuit breaker that opens after 10 errors in a 60-second window. The default `User-Agent` is `Tome/1.0 (+https://github.com/HesNotTheGuy/tome)`, which is configurable in settings. If a Tome install ever appears to be misbehaving, please file an issue at <https://github.com/HesNotTheGuy/tome/issues> and we'll tighten the defaults.
 
+## Forking
+
+If you fork Tome and ship a modified build, **change the `User-Agent` string** so MediaWiki and abuse reporters can identify your fork as the source of its traffic. The constant lives at [`crates/tome-config/src/lib.rs`](crates/tome-config/src/lib.rs) — `DEFAULT_USER_AGENT`. Use the format MediaWiki documents:
+
+```
+<your-fork-name>/<version> (+<your-contact-url>)
+```
+
+Concrete example: `Codex/1.2 (+https://github.com/you/codex)`. Don't keep `Tome/1.0` pointing at your fork's domain — it routes abuse reports to the wrong project. MediaWiki blocks misbehaving requests by IP, not by `User-Agent`, but the UA is how operators know who to talk to.
+
 ## License
 
 [GPL-3.0](LICENSE) © HesNotTheGuy

@@ -13,6 +13,11 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Default User-Agent. The URL is the project's public issue tracker, used as
 /// the contact channel required by MediaWiki's etiquette policy.
+///
+/// **Forking note:** if you ship a modified build, change this string so your
+/// fork is identified as the source of its traffic, e.g.
+/// `MyFork/1.0 (+https://github.com/you/myfork)`. Leaving it as
+/// `Tome/1.0 (+...)` routes abuse reports to the wrong maintainer.
 pub const DEFAULT_USER_AGENT: &str = "Tome/1.0 (+https://github.com/HesNotTheGuy/tome)";
 
 /// Wikipedia REST endpoint for rendered article HTML (Parsoid output).
