@@ -64,6 +64,9 @@ hex = "0.4"
 # XML parsing (used by dump page parser)
 quick-xml = "0.36"
 
+# TOML (module definitions)
+toml = "0.8"
+
 # Internal crates (resolved by workspace)
 tome-core    = { path = "crates/tome-core" }
 tome-config  = { path = "crates/tome-config" }

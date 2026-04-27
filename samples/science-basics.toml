@@ -1,0 +1,33 @@
+# Tome module: Science Basics
+#
+# A starter module covering foundational physics, chemistry, and biology.
+# Copy this file, change the id and tweak categories/titles to your taste,
+# then import it through the Tome UI (Library -> Import module).
+
+id = "science-basics"
+name = "Science Basics"
+description = "Introductory physics, chemistry, and biology — high-school through first-year university."
+default_tier = "warm"
+
+# Categories pulled in from Wikipedia. `depth` controls how far into the
+# subcategory tree to recurse. 0 = the named category only; 1 = + immediate
+# subcategories; 2 = + sub-subcategories; etc. Keep depth modest — Wikipedia
+# categories balloon fast.
+[[categories]]
+name = "Physics"
+depth = 2
+
+[[categories]]
+name = "Chemistry"
+depth = 2
+
+[[categories]]
+name = "Biology"
+depth = 1
+
+# Specific articles that aren't in the categories above but you want anyway.
+explicit_titles = [
+    "Scientific method",
+    "Periodic table",
+    "Cell (biology)",
+]
