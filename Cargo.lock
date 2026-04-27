@@ -2193,10 +2193,9 @@ dependencies = [
 name = "tome-archive"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "rusqlite",
  "serde",
- "tome-api",
+ "tempfile",
  "tome-config",
  "tome-core",
  "tracing",
@@ -2269,6 +2268,7 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tome-api",
  "tome-archive",
