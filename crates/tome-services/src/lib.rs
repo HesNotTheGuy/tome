@@ -18,4 +18,4 @@ pub mod link_resolver;
 pub mod tome;
 
 pub use link_resolver::StorageLinkResolver;
-pub use tome::{ArticleResponse, ArticleSource, Tome};
+pub use tome::{ArticleResponse, ArticleSource, TierCounts, Tome};

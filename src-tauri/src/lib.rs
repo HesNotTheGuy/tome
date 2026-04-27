@@ -17,7 +17,7 @@ use tome_core::{Tier, Title};
 use tome_dump::DumpReader;
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::{Index as SearchIndex, SearchHit};
-use tome_services::{ArticleResponse, Tome};
+use tome_services::{ArticleResponse, TierCounts, Tome};
 use tome_storage::{ArticleStore, SqliteArticleStore};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -45,6 +45,11 @@ pub fn run() {
             list_archive,
             search_archive,
             save_revision,
+            kill_switch_engaged,
+            set_kill_switch,
+            breaker_open,
+            user_agent,
+            tier_counts,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -164,6 +169,31 @@ async fn save_revision(
             user_note.as_deref(),
         )
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kill_switch_engaged(state: State<'_, Arc<Tome>>) -> bool {
+    state.kill_switch_engaged()
+}
+
+#[tauri::command]
+fn set_kill_switch(engaged: bool, state: State<'_, Arc<Tome>>) {
+    state.set_kill_switch(engaged);
+}
+
+#[tauri::command]
+fn breaker_open(state: State<'_, Arc<Tome>>) -> bool {
+    state.breaker_open()
+}
+
+#[tauri::command]
+fn user_agent(state: State<'_, Arc<Tome>>) -> String {
+    state.user_agent().to_string()
+}
+
+#[tauri::command]
+fn tier_counts(state: State<'_, Arc<Tome>>) -> Result<TierCounts, String> {
+    state.tier_counts().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

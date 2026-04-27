@@ -234,4 +234,43 @@ impl Tome {
     ) -> Result<Vec<tome_archive::SavedRevisionMeta>> {
         self.archive.search(query, limit)
     }
+
+    // --- Settings / introspection ---
+
+    pub fn kill_switch_engaged(&self) -> bool {
+        self.api.kill_switch().is_engaged()
+    }
+
+    pub fn set_kill_switch(&self, engaged: bool) {
+        if engaged {
+            self.api.kill_switch().engage();
+        } else {
+            self.api.kill_switch().disengage();
+        }
+    }
+
+    pub fn breaker_open(&self) -> bool {
+        self.api.breaker_is_open()
+    }
+
+    pub fn user_agent(&self) -> &str {
+        tome_config::DEFAULT_USER_AGENT
+    }
+
+    pub fn tier_counts(&self) -> Result<TierCounts> {
+        Ok(TierCounts {
+            hot: self.storage.count_by_tier(Tier::Hot)?,
+            warm: self.storage.count_by_tier(Tier::Warm)?,
+            cold: self.storage.count_by_tier(Tier::Cold)?,
+            evicted: self.storage.count_by_tier(Tier::Evicted)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierCounts {
+    pub hot: u64,
+    pub warm: u64,
+    pub cold: u64,
+    pub evicted: u64,
 }

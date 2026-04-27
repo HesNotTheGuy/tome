@@ -3,15 +3,17 @@ import { useEffect, useState } from "react";
 import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
+import Settings from "./panes/Settings";
 import { ThemeToggle, useTheme } from "./components/Theme";
 import SearchBar from "./components/SearchBar";
 
-type Pane = "library" | "reader" | "archive";
+type Pane = "library" | "reader" | "archive" | "settings";
 
 const PANE_LABEL: Record<Pane, string> = {
   library: "Library",
   reader: "Reader",
   archive: "Archive",
+  settings: "Settings",
 };
 
 export default function App() {
@@ -65,6 +67,7 @@ export default function App() {
           />
         )}
         {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
+        {pane === "settings" && <Settings />}
       </main>
 
       <StatusBar />

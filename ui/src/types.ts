@@ -58,5 +58,12 @@ export interface SavedRevision extends SavedRevisionMeta {
   html: string | null;
 }
 
+export interface TierCounts {
+  hot: number;
+  warm: number;
+  cold: number;
+  evicted: number;
+}
+
 /** Whether we're running inside a Tauri WebView vs. a browser-only dev session. */
 export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

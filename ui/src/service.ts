@@ -13,6 +13,7 @@ import {
   SavedRevisionMeta,
   SearchHit,
   Tier,
+  TierCounts,
 } from "./types";
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -45,6 +46,12 @@ export interface TomeService {
     html?: string | null;
     userNote?: string | null;
   }): Promise<number>;
+  killSwitchEngaged(): Promise<boolean>;
+  setKillSwitch(engaged: boolean): Promise<void>;
+  breakerOpen(): Promise<boolean>;
+  userAgent(): Promise<string>;
+  tierCounts(): Promise<TierCounts>;
+  healthCheck(): Promise<string>;
 }
 
 /** Live service backed by Tauri commands. */
@@ -78,5 +85,23 @@ export const tome: TomeService = {
       html: html ?? null,
       userNote: userNote ?? null,
     });
+  },
+  killSwitchEngaged() {
+    return invoke<boolean>("kill_switch_engaged");
+  },
+  setKillSwitch(engaged) {
+    return invoke<void>("set_kill_switch", { engaged });
+  },
+  breakerOpen() {
+    return invoke<boolean>("breaker_open");
+  },
+  userAgent() {
+    return invoke<string>("user_agent");
+  },
+  tierCounts() {
+    return invoke<TierCounts>("tier_counts");
+  },
+  healthCheck() {
+    return invoke<string>("health_check");
   },
 };
