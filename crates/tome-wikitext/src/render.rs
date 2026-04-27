@@ -225,7 +225,7 @@ fn render_node(state: &mut State<'_>, node: &Node<'_>) {
             };
             state.out.push_str(&format!(
                 "<a href=\"#/article/{}\" class=\"{}\">",
-                escape_attr(&resolved_target),
+                escape_attr(&url_encode_title(&resolved_target)),
                 class
             ));
             if text.is_empty() {
@@ -426,6 +426,26 @@ fn collect_text_into(buf: &mut String, nodes: &[Node<'_>]) {
             _ => {}
         }
     }
+}
+
+/// Encode a Wikipedia article title for use in a URL fragment.
+/// Spaces become underscores (Wikipedia URL convention); a small set of
+/// reserved characters are percent-encoded to keep the URL well-formed.
+fn url_encode_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    for ch in title.chars() {
+        match ch {
+            ' ' => out.push('_'),
+            '#' | '?' | '%' | '&' | '"' | '<' | '>' | '\\' | '|' | '{' | '}' => {
+                let mut buf = [0u8; 4];
+                for byte in ch.encode_utf8(&mut buf).as_bytes() {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 fn split_external_link(nodes: &[Node<'_>]) -> (String, String) {

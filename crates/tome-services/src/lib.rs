@@ -1,12 +1,21 @@
 //! Service orchestration layer.
 //!
-//! The UI talks to this crate and nothing else. Service methods compose the
-//! lower-level crates (dump, storage, api, search, wikitext, modules,
-//! archive) into the user-facing operations exposed through Tauri commands:
-//! ingest a dump, install a module, search, render an article, save a
-//! revision, refresh from the API, etc.
+//! The UI talks to this crate and nothing else. The [`Tome`] facade holds
+//! references to every domain crate and composes their operations into the
+//! flows the UI needs:
 //!
-//! Keeping this layer thin means the lower crates stay testable in isolation
-//! and the UI never grows knowledge of storage formats or API quirks.
+//! - [`Tome::read_article`] — the Cold-tier read flow described in
+//!   [`ARCHITECTURE.md`](../../../ARCHITECTURE.md). Resolves through the
+//!   storage tier; if Cold, decodes from the dump and renders locally.
+//! - [`Tome::search`] — wraps the Tantivy index.
+//! - [`Tome::install_module`] — persists a module spec and its members.
+//! - [`Tome::save_revision`] — appends to the revision archive.
 //!
-//! Implementation expands across steps 2-13 as the lower layers come online.
+//! Each component is held as an `Arc` so the facade is cheap to clone and
+//! safe to share across async tasks.
+
+pub mod link_resolver;
+pub mod tome;
+
+pub use link_resolver::StorageLinkResolver;
+pub use tome::{ArticleResponse, ArticleSource, Tome};
