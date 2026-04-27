@@ -4,6 +4,7 @@ import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
 import { ThemeToggle, useTheme } from "./components/Theme";
+import SearchBar from "./components/SearchBar";
 
 type Pane = "library" | "reader" | "archive";
 
@@ -49,7 +50,8 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <SearchBar onOpenArticle={(title) => setActiveTitle(title)} />
           <ThemeToggle />
         </div>
       </header>
