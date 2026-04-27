@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tome",
+  "version": "0.1.0",
+  "identifier": "com.hesnottheguy.tome",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../ui run dev",
+    "beforeBuildCommand": "npm --prefix ../ui run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Tome",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "category": "Education",
+    "shortDescription": "Offline Wikipedia for the desktop.",
+    "longDescription": "Browse and search the entire Wikipedia corpus offline, with granular control over what's stored locally."
+  }
+}

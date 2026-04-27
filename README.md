@@ -15,14 +15,37 @@ Offline Wikipedia, with control. Tome reads Wikipedia's official multistream XML
 
 ## Building
 
-> The full build instructions arrive at step 9 (UI integration). For now, you can verify the Rust workspace compiles:
+You'll need:
+
+- Rust 1.85+ (edition 2024)
+- Node.js 18+ and npm
+- Platform build tools — Visual Studio Build Tools on Windows, Xcode CLT on macOS, `webkit2gtk` + `libssl-dev` on Linux
+
+First-time setup:
 
 ```bash
+# Rust workspace
 cargo check --workspace
 cargo test --workspace
+
+# Frontend deps
+cd ui && npm install && cd ..
 ```
 
-Requires Rust 1.85+ (edition 2024). Toolchain managed via `rust-toolchain.toml` once added.
+Run the dev shell (Tauri spawns Vite, opens a WebView pointed at it):
+
+```bash
+cargo install tauri-cli --version "^2"   # one-time
+cargo tauri dev
+```
+
+Run the frontend in a browser without the Rust backend (faster iteration on UI styling):
+
+```bash
+cd ui && npm run dev      # http://localhost:1420
+```
+
+You'll see an "outside the Tauri shell" banner in each pane — that's expected; backend calls are stubbed.
 
 ## Acquiring a Wikipedia dump
 

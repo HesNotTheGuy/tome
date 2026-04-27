@@ -11,7 +11,7 @@ members = [
     "crates/tome-modules",
     "crates/tome-archive",
     "crates/tome-services",
-    # "src-tauri" is added in step 9 when UI integration begins.
+    "src-tauri",
 ]
 
 [workspace.package]

@@ -1,0 +1,38 @@
+[package]
+name = "tome-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tome desktop shell."
+
+[lib]
+name = "tome_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+tome-services = { workspace = true }
+tome-storage = { workspace = true }
+tome-api = { workspace = true }
+tome-search = { workspace = true }
+tome-modules = { workspace = true }
+tome-archive = { workspace = true }
+tome-dump = { workspace = true }
+tome-wikitext = { workspace = true }
