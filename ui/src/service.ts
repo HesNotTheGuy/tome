@@ -62,6 +62,8 @@ export interface TomeService {
   dumpPath(): Promise<string | null>;
   setDumpPath(path: string | null): Promise<void>;
   lastIndexPath(): Promise<string | null>;
+  mapSourcePath(): Promise<string | null>;
+  setMapSourcePath(path: string | null): Promise<void>;
   ingestGeotags(
     path: string,
     onProgress: (count: number) => void,
@@ -153,6 +155,12 @@ export const tome: TomeService = {
   },
   lastIndexPath() {
     return invoke<string | null>("last_index_path");
+  },
+  mapSourcePath() {
+    return invoke<string | null>("map_source_path");
+  },
+  setMapSourcePath(path) {
+    return invoke<void>("set_map_source_path", { path });
   },
   countGeotags() {
     return invoke<number>("count_geotags");

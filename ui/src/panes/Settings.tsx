@@ -175,6 +175,8 @@ export default function Settings() {
 
       <RedirectsSection />
 
+      <MapSourceSection />
+
       <Section title="Reader behavior">
         <Row label="Show related articles">
           <button
@@ -782,6 +784,121 @@ function GeotagSection() {
               ✓ {summary.entries_processed.toLocaleString()} geotags in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
             </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MapSourceSection() {
+  const [path, setPath] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .mapSourcePath()
+      .then((p) => {
+        setSaved(p);
+        if (p) setPath(p);
+      })
+      .catch(() => setSaved(null));
+  }, []);
+
+  async function handleSave() {
+    if (!isTauri()) return;
+    setPhase("saving");
+    setError(null);
+    try {
+      const trimmed = path.trim();
+      await tome.setMapSourcePath(trimmed === "" ? null : trimmed);
+      setSaved(trimmed === "" ? null : trimmed);
+      setPhase("saved");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  async function handleClear() {
+    setPath("");
+    if (!isTauri()) return;
+    try {
+      await tome.setMapSourcePath(null);
+      setSaved(null);
+      setPhase("saved");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Offline map source
+      </h3>
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
+          Optional. Point Tome at a{" "}
+          <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+            .pmtiles
+          </code>{" "}
+          file and the Map pane renders fully offline from it. Free regional
+          and worldwide downloads are at{" "}
+          <a
+            href="https://maps.protomaps.com/builds/"
+            className="underline text-tome-link"
+          >
+            maps.protomaps.com/builds/
+          </a>
+          . Without this, the map falls back to live OSM tiles (needs network).
+        </p>
+        <div className="text-xs text-tome-muted">
+          Currently configured:{" "}
+          <span className="font-mono text-tome-text">
+            {saved ? saved : "—"}
+          </span>
+        </div>
+
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={phase === "saving"}
+          placeholder="/path/to/world.pmtiles"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={phase === "saving" || !isTauri()}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "saving" ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={handleClear}
+              disabled={!saved || !isTauri()}
+              className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted disabled:opacity-50 disabled:cursor-not-allowed hover:bg-tome-surface-2"
+            >
+              Clear
+            </button>
+          </div>
+          {phase === "saved" && (
+            <span className="text-xs text-tome-success">✓ saved</span>
           )}
           {phase === "error" && error && (
             <span className="text-xs text-tome-danger">{error}</span>

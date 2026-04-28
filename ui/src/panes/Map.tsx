@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import Supercluster from "supercluster";
+import maplibregl, {
+  GeoJSONSource,
+  MapGeoJSONFeature,
+  MapLayerMouseEvent,
+  MapMouseEvent,
+  StyleSpecification,
+} from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import * as pmtiles from "pmtiles";
 
 import { tome } from "../service";
 import { isTauri, MappedGeotag } from "../types";
@@ -10,65 +16,177 @@ interface MapProps {
   onOpen: (title: string) => void;
 }
 
-type PointFeature = Supercluster.PointFeature<{ title: string; page_id: number }>;
-
 /**
  * World map of every primary-geotagged article we've indexed.
  *
- * Implementation notes:
+ * - **Renderer:** MapLibre GL (vector + raster).
+ * - **Basemap source:** if the user has configured a `.pmtiles` archive in
+ *   Settings, the map streams tiles from it via the `tome-pmtiles://` URI
+ *   scheme — fully offline, byte-range fetched from disk. Otherwise it falls
+ *   back to live OSM raster tiles.
+ * - **Pin layer:** a single GeoJSON source feeding three styled layers —
+ *   clusters, cluster counts, and individual points. MapLibre handles the
+ *   clustering natively, so no separate supercluster index needed.
  *
- * - **Leaflet + OpenStreetMap raster tiles**. Tiles need network; if offline
- *   the basemap is empty but the cluster pins still render. That's the price
- *   of not bundling 5+ GB of tiles.
- * - **Supercluster** does viewport-aware clustering on the JS side. We load
- *   every point once (cheap — simplewiki ~7k, enwiki ~1.6M still fits in
- *   memory) and recompute visible clusters whenever the map moves.
- * - **Cluster markers** are styled with a div-icon so we can show counts.
- *   Individual markers are circle-markers — Leaflet's default png-based pin
- *   doesn't survive bundling cleanly and circles are more honest about a
- *   coord being "approximate" anyway.
+ * Click handling: clusters zoom in; points open their article in the Reader.
  */
-export default function Map({ onOpen }: MapProps) {
+export default function MapPane({ onOpen }: MapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const layerRef = useRef<L.LayerGroup | null>(null);
-  const indexRef = useRef<Supercluster<{ title: string; page_id: number }> | null>(
-    null,
-  );
+  const mapRef = useRef<maplibregl.Map | null>(null);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "empty" | "error">(
     "idle",
   );
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [usingOffline, setUsingOffline] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const map = L.map(containerRef.current, {
-      worldCopyJump: true,
-      zoomControl: true,
-    }).setView([20, 0], 2);
+    let cancelled = false;
 
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19,
-    }).addTo(map);
+    (async () => {
+      // Register the pmtiles protocol so MapLibre can fetch from
+      // pmtiles://tome-pmtiles://localhost/world.pmtiles URLs.
+      const protocol = new pmtiles.Protocol();
+      maplibregl.addProtocol("pmtiles", protocol.tile);
 
-    const layer = L.layerGroup().addTo(map);
-    mapRef.current = map;
-    layerRef.current = layer;
+      // Decide the basemap style based on whether a pmtiles file is configured.
+      let style: StyleSpecification;
+      let offline = false;
+      try {
+        if (isTauri()) {
+          const path = await tome.mapSourcePath();
+          if (path) {
+            offline = true;
+          }
+        }
+      } catch {
+        /* fall through to OSM */
+      }
+      if (offline) {
+        style = pmtilesStyle();
+      } else {
+        style = osmStyle();
+      }
+      if (cancelled) return;
+      setUsingOffline(offline);
 
-    const onMoveEnd = () => render();
-    map.on("moveend", onMoveEnd);
-    map.on("zoomend", onMoveEnd);
+      const map = new maplibregl.Map({
+        container: containerRef.current!,
+        style,
+        center: [0, 20],
+        zoom: 1.5,
+        attributionControl: { compact: true },
+      });
+      mapRef.current = map;
+      map.addControl(new maplibregl.NavigationControl({}), "top-right");
+
+      map.on("load", () => {
+        // Article-pin source. Empty initially; populated when the data load
+        // resolves below.
+        map.addSource("articles", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+          cluster: true,
+          clusterMaxZoom: 14,
+          clusterRadius: 50,
+        });
+
+        map.addLayer({
+          id: "clusters",
+          type: "circle",
+          source: "articles",
+          filter: ["has", "point_count"],
+          paint: {
+            "circle-color": [
+              "step",
+              ["get", "point_count"],
+              "#6366f1",
+              100,
+              "#4f46e5",
+              1000,
+              "#3730a3",
+            ],
+            "circle-radius": [
+              "step",
+              ["get", "point_count"],
+              16,
+              100,
+              22,
+              1000,
+              28,
+            ],
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#ffffff",
+          },
+        });
+        map.addLayer({
+          id: "cluster-count",
+          type: "symbol",
+          source: "articles",
+          filter: ["has", "point_count"],
+          layout: {
+            "text-field": ["get", "point_count_abbreviated"],
+            "text-size": 12,
+          },
+          paint: {
+            "text-color": "#ffffff",
+          },
+        });
+        map.addLayer({
+          id: "unclustered-point",
+          type: "circle",
+          source: "articles",
+          filter: ["!", ["has", "point_count"]],
+          paint: {
+            "circle-color": "#6366f1",
+            "circle-radius": 5,
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "#ffffff",
+          },
+        });
+
+        // Cluster click → zoom in
+        map.on("click", "clusters", (e: MapMouseEvent) => {
+          const features = map.queryRenderedFeatures(e.point, {
+            layers: ["clusters"],
+          });
+          const feature = features[0];
+          if (!feature) return;
+          const clusterId = feature.properties?.["cluster_id"] as number;
+          const src = map.getSource("articles") as GeoJSONSource | undefined;
+          if (!src) return;
+          src.getClusterExpansionZoom(clusterId).then((zoom) => {
+            const geom = feature.geometry as GeoJSON.Point;
+            map.easeTo({ center: geom.coordinates as [number, number], zoom });
+          });
+        });
+
+        // Pin click → open article
+        map.on("click", "unclustered-point", (e: MapLayerMouseEvent) => {
+          const f = e.features?.[0] as MapGeoJSONFeature | undefined;
+          if (!f) return;
+          const title = f.properties?.["title"] as string | undefined;
+          if (title) onOpen(title);
+        });
+
+        // Cursor feedback
+        for (const layer of ["clusters", "unclustered-point"]) {
+          map.on("mouseenter", layer, () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", layer, () => {
+            map.getCanvas().style.cursor = "";
+          });
+        }
+      });
+    })();
 
     return () => {
-      map.off("moveend", onMoveEnd);
-      map.off("zoomend", onMoveEnd);
-      map.remove();
+      cancelled = true;
+      mapRef.current?.remove();
       mapRef.current = null;
-      layerRef.current = null;
-      indexRef.current = null;
+      maplibregl.removeProtocol("pmtiles");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -84,84 +202,30 @@ export default function Map({ onOpen }: MapProps) {
           setPhase("empty");
           return;
         }
-        const features: PointFeature[] = rows.map((g) => ({
+        const features: GeoJSON.Feature<GeoJSON.Point>[] = rows.map((g) => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [g.lon, g.lat] },
           properties: { title: g.title, page_id: g.page_id },
         }));
-        const idx = new Supercluster<{ title: string; page_id: number }>({
-          radius: 60,
-          maxZoom: 16,
-        });
-        idx.load(features);
-        indexRef.current = idx;
+        const data: GeoJSON.FeatureCollection<GeoJSON.Point> = {
+          type: "FeatureCollection",
+          features,
+        };
+        const map = mapRef.current;
+        if (!map) return;
+        const apply = () => {
+          const src = map.getSource("articles") as GeoJSONSource | undefined;
+          if (src) src.setData(data);
+        };
+        if (map.isStyleLoaded() && map.getSource("articles")) apply();
+        else map.once("load", apply);
         setPhase("ready");
-        render();
       })
       .catch((e) => {
         setError(String(e));
         setPhase("error");
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  function render() {
-    const map = mapRef.current;
-    const layer = layerRef.current;
-    const idx = indexRef.current;
-    if (!map || !layer || !idx) return;
-    layer.clearLayers();
-
-    const b = map.getBounds();
-    const bbox: [number, number, number, number] = [
-      b.getWest(),
-      b.getSouth(),
-      b.getEast(),
-      b.getNorth(),
-    ];
-    const zoom = Math.round(map.getZoom());
-    const clusters = idx.getClusters(bbox, zoom);
-
-    for (const c of clusters) {
-      const coords = c.geometry.coordinates as [number, number];
-      const lon = coords[0];
-      const lat = coords[1];
-      const props = c.properties as
-        | Supercluster.ClusterProperties
-        | { title: string; page_id: number };
-
-      if ("cluster" in props && props.cluster) {
-        const n = props.point_count;
-        const size = n < 10 ? 28 : n < 100 ? 36 : n < 1000 ? 44 : 52;
-        const html = `<div class="tome-cluster" style="width:${size}px;height:${size}px;line-height:${size}px;">${
-          n < 1000 ? n : `${(n / 1000).toFixed(1)}k`
-        }</div>`;
-        const icon = L.divIcon({
-          html,
-          className: "",
-          iconSize: [size, size],
-        });
-        const m = L.marker([lat, lon], { icon });
-        m.on("click", () => {
-          const expandTo = Math.min(idx.getClusterExpansionZoom(props.cluster_id), 16);
-          map.flyTo([lat, lon], expandTo);
-        });
-        layer.addLayer(m);
-      } else {
-        const p = props as { title: string; page_id: number };
-        const m = L.circleMarker([lat, lon], {
-          radius: 5,
-          weight: 1.5,
-          color: "var(--tome-accent, #6366f1)",
-          fillColor: "var(--tome-accent, #6366f1)",
-          fillOpacity: 0.9,
-        });
-        m.bindTooltip(p.title, { direction: "top", offset: [0, -4] });
-        m.on("click", () => onOpen(p.title));
-        layer.addLayer(m);
-      }
-    }
-  }
 
   return (
     <section className="h-full flex flex-col">
@@ -175,7 +239,15 @@ export default function Map({ onOpen }: MapProps) {
           </div>
           <div className="text-xs text-tome-muted whitespace-nowrap">
             {phase === "loading" && "loading…"}
-            {phase === "ready" && `${count.toLocaleString()} articles`}
+            {phase === "ready" && (
+              <>
+                {count.toLocaleString()} articles
+                {" · "}
+                <span className={usingOffline ? "text-tome-success" : ""}>
+                  {usingOffline ? "offline basemap" : "online basemap"}
+                </span>
+              </>
+            )}
             {phase === "empty" && "no geotags ingested yet"}
             {phase === "error" && (
               <span className="text-tome-danger">{error}</span>
@@ -200,4 +272,45 @@ export default function Map({ onOpen }: MapProps) {
       <div ref={containerRef} className="flex-1 min-h-0 tome-map" />
     </section>
   );
+}
+
+/** Live OpenStreetMap raster basemap. Needs network. */
+function osmStyle(): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      },
+    },
+    layers: [{ id: "osm", type: "raster", source: "osm" }],
+  };
+}
+
+/**
+ * Offline vector basemap fed by the user's `.pmtiles` archive via Tauri's
+ * custom URI scheme. We don't bundle a proper style sheet — the user's file
+ * may be raster, vector, or anything else — so we let MapLibre derive a
+ * minimal default by pointing at the source. For richer styling, ship a
+ * separate style.json and reference its layers here.
+ */
+function pmtilesStyle(): StyleSpecification {
+  return {
+    version: 8,
+    glyphs: undefined,
+    sources: {
+      basemap: {
+        type: "raster",
+        url: "pmtiles://tome-pmtiles://localhost/basemap.pmtiles",
+        tileSize: 256,
+        attribution:
+          'Offline basemap: user-supplied <a href="https://protomaps.com/">PMTiles</a>',
+      },
+    },
+    layers: [{ id: "basemap", type: "raster", source: "basemap" }],
+  };
 }

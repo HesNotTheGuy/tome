@@ -376,6 +376,17 @@ impl Tome {
         self.settings().last_index_path
     }
 
+    /// User-configured path to a `.pmtiles` archive used by the Map pane as
+    /// an offline basemap. `None` means the Map falls back to live OSM.
+    pub fn map_source_path(&self) -> Option<PathBuf> {
+        self.settings().map_source_path
+    }
+
+    /// Configure (or clear) the offline map source. Persisted immediately.
+    pub fn set_map_source_path(&self, path: Option<PathBuf>) -> Result<()> {
+        self.save_settings(|s| s.map_source_path = path)
+    }
+
     pub fn tier_counts(&self) -> Result<TierCounts> {
         Ok(TierCounts {
             hot: self.storage.count_by_tier(Tier::Hot)?,

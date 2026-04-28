@@ -8,6 +8,8 @@
 //! errors as plain strings to the frontend. The string is the
 //! `Display` form of [`tome_core::TomeError`].
 
+mod pmtiles_protocol;
+
 use std::sync::Arc;
 
 use std::path::PathBuf;
@@ -38,6 +40,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .register_asynchronous_uri_scheme_protocol(
+            pmtiles_protocol::SCHEME,
+            pmtiles_protocol::handle,
+        )
         .setup(|app| {
             let tome = build_tome(app)?;
             app.manage(Arc::new(tome));
@@ -77,6 +83,8 @@ pub fn run() {
             dump_path,
             set_dump_path,
             last_index_path,
+            map_source_path,
+            set_map_source_path,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -278,6 +286,19 @@ fn last_index_path(state: State<'_, Arc<Tome>>) -> Option<String> {
     state
         .last_index_path()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn map_source_path(state: State<'_, Arc<Tome>>) -> Option<String> {
+    state
+        .map_source_path()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn set_map_source_path(path: Option<String>, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    let pb = path.map(PathBuf::from);
+    state.set_map_source_path(pb).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

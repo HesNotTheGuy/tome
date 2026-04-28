@@ -36,3 +36,6 @@ tome-modules = { workspace = true }
 tome-archive = { workspace = true }
 tome-dump = { workspace = true }
 tome-wikitext = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
