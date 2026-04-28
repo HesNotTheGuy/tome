@@ -75,6 +75,10 @@ pub struct Settings {
     /// shared categorylinks. Default on; toggleable in Settings.
     #[serde(default = "default_true")]
     pub recommendations_enabled: bool,
+    /// Absolute path to a `.pmtiles` archive used as the offline basemap on
+    /// the Map pane. When `None`, the Map falls back to live OSM tiles.
+    #[serde(default)]
+    pub map_source_path: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -83,6 +87,7 @@ impl Default for Settings {
             dump_path: None,
             last_index_path: None,
             recommendations_enabled: true,
+            map_source_path: None,
         }
     }
 }
@@ -142,6 +147,7 @@ mod tests {
             dump_path: Some(PathBuf::from("/some/dump.bz2")),
             last_index_path: Some(PathBuf::from("/some/index.bz2")),
             recommendations_enabled: false,
+            map_source_path: Some(PathBuf::from("/maps/world.pmtiles")),
         };
         s.save(dir.path()).unwrap();
         let loaded = Settings::load(dir.path());

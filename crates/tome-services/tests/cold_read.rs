@@ -79,6 +79,7 @@ fn build_facade() -> (Tome, NamedTempFile, TempDir) {
         dump_path: Some(dump_file.path().to_path_buf()),
         last_index_path: None,
         recommendations_enabled: true,
+        map_source_path: None,
     }
     .save(data_dir.path())
     .unwrap();
