@@ -11,6 +11,7 @@ import {
   InstalledModule,
   IS_TAURI,
   ModuleSpec,
+  Revision,
   SavedRevisionMeta,
   SearchHit,
   Tier,
@@ -56,6 +57,7 @@ export interface TomeService {
     path: string,
     onProgress: (count: number) => void,
   ): Promise<IngestSummary>;
+  fetchRevisions(title: string, limit: number): Promise<Revision[]>;
   healthCheck(): Promise<string>;
 }
 
@@ -105,6 +107,9 @@ export const tome: TomeService = {
   },
   tierCounts() {
     return invoke<TierCounts>("tier_counts");
+  },
+  fetchRevisions(title, limit) {
+    return invoke<Revision[]>("fetch_revisions", { title, limit });
   },
   async ingestIndex(path, onProgress) {
     if (!IS_TAURI) {

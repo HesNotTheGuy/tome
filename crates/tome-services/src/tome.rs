@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tome_api::MediaWikiClient;
+use tome_api::{MediaWikiClient, Revision};
 use tome_archive::ArchiveStore;
 use tome_core::{Result, SearchHit, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
@@ -238,6 +238,12 @@ impl Tome {
         limit: usize,
     ) -> Result<Vec<tome_archive::SavedRevisionMeta>> {
         self.archive.search(query, limit)
+    }
+
+    /// Fetch the most recent revisions for an article from the MediaWiki
+    /// action API. Used by the Reader timeline. Capped at 500 by the API.
+    pub async fn fetch_revisions(&self, title: &str, limit: u32) -> Result<Vec<Revision>> {
+        self.api.fetch_revisions(title, limit).await
     }
 
     // --- Settings / introspection ---

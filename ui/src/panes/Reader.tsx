@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { ArticleResponse, IS_TAURI } from "../types";
+import { ArticleResponse, IS_TAURI, Revision } from "../types";
+import Timeline from "../components/Timeline";
 
 interface ReaderProps {
   title: string | null;
@@ -11,6 +12,9 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
   const [response, setResponse] = useState<ArticleResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revisions, setRevisions] = useState<Revision[] | null>(null);
+  const [revLoading, setRevLoading] = useState(false);
+  const [revError, setRevError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!title) {
@@ -29,12 +33,28 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
     }
     setLoading(true);
     setError(null);
+    setRevisions(null); // reset on article change
+    setRevError(null);
     tome
       .readArticle(title)
       .then((r) => setResponse(r))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, [title]);
+
+  async function loadRevisions() {
+    if (!title || !IS_TAURI) return;
+    setRevLoading(true);
+    setRevError(null);
+    try {
+      const list = await tome.fetchRevisions(title, 50);
+      setRevisions(list);
+    } catch (e) {
+      setRevError(String(e));
+    } finally {
+      setRevLoading(false);
+    }
+  }
 
   // Internal links in the rendered HTML use `#/article/{slug}`. Catch them and
   // navigate without leaving the SPA.
@@ -69,11 +89,16 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
 
   return (
     <div className="relative">
-      <div className="sticky top-0 z-10 bg-white/80 dark:bg-zinc-950/80 backdrop-blur border-b border-zinc-200 dark:border-zinc-800 px-6 py-3 max-w-3xl mx-auto flex items-center justify-between">
-        <div>
+      <div
+        className="sticky top-0 z-10 backdrop-blur border-b border-tome-border px-6 py-3 max-w-3xl mx-auto flex items-start justify-between gap-4"
+        style={{
+          backgroundColor: "color-mix(in srgb, var(--tome-surface) 80%, transparent)",
+        }}
+      >
+        <div className="flex-1">
           <h1 className="text-xl font-bold">{response?.title ?? title}</h1>
           {response?.source && (
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="text-xs text-tome-muted">
               served from <code>{response.source}</code>
               {response.revision_id != null && (
                 <>
@@ -84,18 +109,43 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
             </p>
           )}
         </div>
+        <button
+          type="button"
+          onClick={loadRevisions}
+          disabled={!IS_TAURI || revLoading}
+          className="text-xs px-2 py-1 rounded border border-tome-border hover:bg-tome-surface-2 text-tome-muted disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {revLoading
+            ? "Loading…"
+            : revisions
+              ? `Revisions · ${revisions.length}`
+              : "Show revisions"}
+        </button>
       </div>
 
       {loading && (
-        <div className="px-6 py-6 max-w-3xl mx-auto text-sm text-zinc-500">
+        <div className="px-6 py-6 max-w-3xl mx-auto text-sm text-tome-muted">
           Loading…
         </div>
       )}
 
       {error && (
         <div className="px-6 py-6 max-w-3xl mx-auto">
-          <div className="p-4 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 text-sm text-red-700 dark:text-red-300">
+          <div className="p-4 rounded border border-tome-border bg-tome-surface-2 text-sm text-tome-danger">
             {error}
+          </div>
+        </div>
+      )}
+
+      {revisions && !revError && (
+        <div className="px-6 py-4 max-w-3xl mx-auto border-b border-tome-border">
+          <Timeline revisions={revisions} />
+        </div>
+      )}
+      {revError && (
+        <div className="px-6 py-2 max-w-3xl mx-auto">
+          <div className="p-2 rounded border border-tome-border text-xs text-tome-danger">
+            {revError}
           </div>
         </div>
       )}

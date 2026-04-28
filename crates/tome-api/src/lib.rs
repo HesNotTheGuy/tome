@@ -34,7 +34,7 @@ pub mod transport;
 pub use backoff::BackoffState;
 pub use breaker::CircuitBreaker;
 pub use cache::Cache;
-pub use client::{ClientConfig, MediaWikiClient};
+pub use client::{ClientConfig, MediaWikiClient, Revision};
 pub use kill_switch::KillSwitch;
 pub use log_buffer::{RequestEntry, RequestLog};
 pub use rate_limit::TokenBucket;

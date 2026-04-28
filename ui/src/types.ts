@@ -70,5 +70,15 @@ export interface IngestSummary {
   elapsed_ms: number;
 }
 
+export interface Revision {
+  revision_id: number;
+  parent_id: number;
+  minor: boolean;
+  user: string;
+  timestamp: string;
+  size: number;
+  comment: string;
+}
+
 /** Whether we're running inside a Tauri WebView vs. a browser-only dev session. */
 export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

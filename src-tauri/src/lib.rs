@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport};
+use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport, Revision};
 use tome_archive::{ArchiveStore, SavedRevisionMeta};
 use tome_core::{SearchHit, Tier, Title};
 use tome_dump::DumpReader;
@@ -53,6 +53,7 @@ pub fn run() {
             user_agent,
             tier_counts,
             ingest_index,
+            fetch_revisions,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -218,6 +219,18 @@ async fn ingest_index(
     .await
     .map_err(|e| format!("ingest task join: {e}"))?
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_revisions(
+    title: String,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<Revision>, String> {
+    state
+        .fetch_revisions(&title, limit)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
