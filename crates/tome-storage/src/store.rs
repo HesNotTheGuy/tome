@@ -76,6 +76,16 @@ pub trait ArticleStore: Send + Sync {
     /// Excludes the source article itself. Powers the Reader's "Related
     /// articles" section.
     fn related_to(&self, page_id: u64, limit: u32) -> Result<Vec<RelatedArticle>>;
+
+    // --- Redirects ---
+
+    fn batch_upsert_redirects(&self, entries: &[crate::redirect::Redirect]) -> Result<u64>;
+    /// Resolve a redirect by source title. Returns the target title if the
+    /// source title is a redirect we know about and the source's article
+    /// record exists in storage. The Reader uses this so typing "USA" lands
+    /// on "United States".
+    fn resolve_redirect(&self, source_title: &Title) -> Result<Option<String>>;
+    fn count_redirects(&self) -> Result<u64>;
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -638,6 +648,66 @@ impl ArticleStore for SqliteArticleStore {
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM categorylinks", [], |row| row.get(0))
             .map_err(|e| TomeError::Storage(format!("count categorylinks: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn batch_upsert_redirects(&self, entries: &[crate::redirect::Redirect]) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin redirects tx: {e}")))?;
+        let mut count = 0_u64;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO redirects (from_page_id, target_title)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(from_page_id) DO UPDATE SET
+                        target_title = excluded.target_title",
+                )
+                .map_err(|e| TomeError::Storage(format!("prepare redirect upsert: {e}")))?;
+            for r in entries {
+                stmt.execute(params![r.from_page_id as i64, r.target_title])
+                    .map_err(|e| TomeError::Storage(format!("upsert redirect: {e}")))?;
+                count += 1;
+            }
+        }
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit redirects: {e}")))?;
+        Ok(count)
+    }
+
+    fn resolve_redirect(&self, source_title: &Title) -> Result<Option<String>> {
+        let conn = self.lock()?;
+        // First find the source title's page_id, then look up its redirect target.
+        let page_id: Option<i64> = conn
+            .query_row(
+                "SELECT page_id FROM articles WHERE title = ?1",
+                params![source_title.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| TomeError::Storage(format!("redirect source lookup: {e}")))?;
+        let Some(pid) = page_id else {
+            return Ok(None);
+        };
+        conn.query_row(
+            "SELECT target_title FROM redirects WHERE from_page_id = ?1",
+            params![pid],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| TomeError::Storage(format!("redirect resolve: {e}")))
+    }
+
+    fn count_redirects(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM redirects", [], |row| row.get(0))
+            .map_err(|e| TomeError::Storage(format!("count redirects: {e}")))?;
         Ok(n as u64)
     }
 

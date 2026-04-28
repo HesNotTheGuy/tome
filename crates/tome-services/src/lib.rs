@@ -17,10 +17,11 @@
 pub mod category_ingest;
 pub mod geotag_ingest;
 pub mod link_resolver;
+pub mod redirect_ingest;
 pub mod tome;
 
 pub use link_resolver::StorageLinkResolver;
 pub use tome::{
     ArticleResponse, ArticleSource, CategoryIngestSummary, GeotagSummary, IngestSummary,
-    TierCounts, Tome,
+    RedirectIngestSummary, TierCounts, Tome,
 };

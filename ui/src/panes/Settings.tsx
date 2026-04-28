@@ -5,6 +5,7 @@ import {
   GeotagSummary,
   IngestSummary,
   isTauri,
+  RedirectIngestSummary,
   TierCounts,
 } from "../types";
 
@@ -171,6 +172,8 @@ export default function Settings() {
       <GeotagSection />
 
       <CategorylinksSection />
+
+      <RedirectsSection />
 
       <Section title="Reader behavior">
         <Row label="Show related articles">
@@ -569,6 +572,110 @@ function CategorylinksSection() {
           {phase === "done" && summary && (
             <span className="text-xs text-tome-success">
               ✓ {summary.entries_processed.toLocaleString()} links in{" "}
+              {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RedirectsSection() {
+  const [path, setPath] = useState("");
+  const [count, setCount] = useState<number | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
+    "idle",
+  );
+  const [progress, setProgress] = useState(0);
+  const [summary, setSummary] = useState<RedirectIngestSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .countRedirects()
+      .then(setCount)
+      .catch(() => setCount(null));
+  }, []);
+
+  async function handleIngest() {
+    if (!isTauri()) {
+      setError("requires the Tauri shell");
+      setPhase("error");
+      return;
+    }
+    if (!path.trim()) {
+      setError("paste the path to a redirect.sql.gz file");
+      setPhase("error");
+      return;
+    }
+    setPhase("running");
+    setProgress(0);
+    setError(null);
+    setSummary(null);
+    try {
+      const result = await tome.ingestRedirects(path.trim(), (n) =>
+        setProgress(n),
+      );
+      setSummary(result);
+      setPhase("done");
+      const updated = await tome.countRedirects();
+      setCount(updated);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Redirects ingestion
+      </h3>
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
+          Optional. Point Tome at a downloaded{" "}
+          <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+            *-redirect.sql.gz
+          </code>{" "}
+          so that typing &quot;USA&quot; lands on &quot;United States&quot;.
+          ~1 MB simplewiki, ~250 MB enwiki.
+        </p>
+        <div className="text-xs text-tome-muted">
+          Currently stored:{" "}
+          <span className="font-mono text-tome-text">
+            {count?.toLocaleString() ?? "—"}
+          </span>{" "}
+          redirects
+        </div>
+
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={phase === "running"}
+          placeholder="/path/to/simplewiki-latest-redirect.sql.gz"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleIngest}
+            disabled={phase === "running" || !isTauri()}
+            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            {phase === "running"
+              ? `Ingesting… ${progress.toLocaleString()}`
+              : "Ingest redirects"}
+          </button>
+          {phase === "done" && summary && (
+            <span className="text-xs text-tome-success">
+              ✓ {summary.entries_processed.toLocaleString()} redirects in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
             </span>
           )}

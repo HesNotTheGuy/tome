@@ -57,6 +57,15 @@ CREATE INDEX IF NOT EXISTS idx_categorylinks_to ON categorylinks(cl_to);
 CREATE INDEX IF NOT EXISTS idx_categorylinks_from ON categorylinks(cl_from);
 "#;
 
+const MIGRATION_4: &str = r#"
+CREATE TABLE IF NOT EXISTS redirects (
+    from_page_id  INTEGER PRIMARY KEY,
+    target_title  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_redirects_target ON redirects(target_title);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -98,6 +107,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 3: {e}")))?;
     }
 
+    if from < 4 {
+        conn.execute_batch(MIGRATION_4)
+            .map_err(|e| TomeError::Storage(format!("apply migration 4: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![4_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 4: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -110,7 +129,7 @@ mod tests {
     /// The highest migration version this codebase ships. Bump this in lockstep
     /// with new MIGRATION_N constants; the assertion below will catch
     /// mismatches.
-    const CURRENT_VERSION: i32 = 3;
+    const CURRENT_VERSION: i32 = 4;
 
     #[test]
     fn fresh_db_reaches_current_version() {

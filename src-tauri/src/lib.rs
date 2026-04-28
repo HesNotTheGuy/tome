@@ -19,7 +19,8 @@ use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{
-    ArticleResponse, CategoryIngestSummary, GeotagSummary, IngestSummary, TierCounts, Tome,
+    ArticleResponse, CategoryIngestSummary, GeotagSummary, IngestSummary, RedirectIngestSummary,
+    TierCounts, Tome,
 };
 use tome_storage::{
     ArticleStore, CategoryMember, CategoryMemberKind, Geotag, RelatedArticle, SqliteArticleStore,
@@ -64,6 +65,8 @@ pub fn run() {
             categories_for_title,
             search_categories,
             count_categorylinks,
+            ingest_redirects,
+            count_redirects,
             related_to_title,
             recommendations_enabled,
             set_recommendations_enabled,
@@ -352,6 +355,29 @@ fn search_categories(
     state
         .search_categories(&prefix, limit)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ingest_redirects(
+    path: String,
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<RedirectIngestSummary, String> {
+    let path = PathBuf::from(path);
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        tome.ingest_redirects(&path, |count| {
+            let _ = app.emit("redirects:progress", count);
+        })
+    })
+    .await
+    .map_err(|e| format!("redirect ingest task join: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn count_redirects(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_redirects().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

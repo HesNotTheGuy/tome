@@ -17,6 +17,7 @@ import {
   IngestSummary,
   InstalledModule,
   ModuleSpec,
+  RedirectIngestSummary,
   RelatedArticle,
   Revision,
   SavedRevisionMeta,
@@ -78,6 +79,11 @@ export interface TomeService {
   categoriesForTitle(title: string): Promise<string[]>;
   searchCategories(prefix: string, limit: number): Promise<string[]>;
   countCategorylinks(): Promise<number>;
+  ingestRedirects(
+    path: string,
+    onProgress: (count: number) => void,
+  ): Promise<RedirectIngestSummary>;
+  countRedirects(): Promise<number>;
   relatedToTitle(title: string, limit: number): Promise<RelatedArticle[]>;
   recommendationsEnabled(): Promise<boolean>;
   setRecommendationsEnabled(enabled: boolean): Promise<void>;
@@ -190,6 +196,21 @@ export const tome: TomeService = {
   },
   countCategorylinks() {
     return invoke<number>("count_categorylinks");
+  },
+  async ingestRedirects(path, onProgress) {
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>(
+      "redirects:progress",
+      (e) => onProgress(e.payload),
+    );
+    try {
+      return await invoke<RedirectIngestSummary>("ingest_redirects", { path });
+    } finally {
+      unlisten();
+    }
+  },
+  countRedirects() {
+    return invoke<number>("count_redirects");
   },
   relatedToTitle(title, limit) {
     return invoke<RelatedArticle[]>("related_to_title", { title, limit });

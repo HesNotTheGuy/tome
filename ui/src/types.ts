@@ -106,6 +106,11 @@ export interface CategoryIngestSummary {
   elapsed_ms: number;
 }
 
+export interface RedirectIngestSummary {
+  entries_processed: number;
+  elapsed_ms: number;
+}
+
 export interface RelatedArticle {
   page_id: number;
   title: string;

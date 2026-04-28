@@ -17,10 +17,12 @@ pub mod article;
 pub mod category;
 pub mod compression;
 pub mod geotag;
+pub mod redirect;
 pub mod schema;
 pub mod store;
 
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
+pub use redirect::Redirect;
 pub use store::{ArticleStore, RelatedArticle, SqliteArticleStore};

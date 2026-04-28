@@ -14,7 +14,7 @@ use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_storage::{
     ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, Geotag,
-    RelatedArticle,
+    Redirect, RelatedArticle,
 };
 use tome_wikitext::Renderer;
 
@@ -114,7 +114,16 @@ impl Tome {
     ///   and for letting first-time users try the app before they download
     ///   25+ GB.
     pub async fn read_article(&self, title: &Title) -> Result<ArticleResponse> {
-        let record = match self.storage.lookup(title)? {
+        // First, follow any redirect we know about. Typing "USA" should land
+        // the reader on "United States" without round-tripping through the
+        // API. The redirect record is keyed off the source page existing in
+        // storage, so this only triggers for ingested-and-known redirects.
+        let resolved = match self.storage.resolve_redirect(title)? {
+            Some(target) => Title::new(&target),
+            None => title.clone(),
+        };
+
+        let record = match self.storage.lookup(&resolved)? {
             Some(r) => r,
             None => {
                 if !self.prefer_api_for_cold {
@@ -567,6 +576,70 @@ impl Tome {
     pub fn set_recommendations_enabled(&self, enabled: bool) -> Result<()> {
         self.save_settings(|s| s.recommendations_enabled = enabled)
     }
+
+    /// Stream-parse a Wikipedia `redirect.sql.gz` and bulk-insert each
+    /// row. Small relative to articles (~1 MB simple, ~250 MB enwiki).
+    pub fn ingest_redirects<F>(
+        &self,
+        path: &Path,
+        mut on_progress: F,
+    ) -> Result<RedirectIngestSummary>
+    where
+        F: FnMut(u64),
+    {
+        let started = Instant::now();
+        let mut buffer: Vec<Redirect> = Vec::with_capacity(INGEST_BATCH_SIZE);
+        let mut total = 0_u64;
+        let mut next_progress = INGEST_PROGRESS_INTERVAL;
+        let storage = self.storage.clone();
+        let mut callback_err: Option<TomeError> = None;
+
+        crate::redirect_ingest::parse_file(path, |r| {
+            if callback_err.is_some() {
+                return;
+            }
+            buffer.push(r);
+            if buffer.len() >= INGEST_BATCH_SIZE {
+                match storage.batch_upsert_redirects(&buffer) {
+                    Ok(n) => {
+                        total += n;
+                        buffer.clear();
+                        if total >= next_progress {
+                            on_progress(total);
+                            next_progress = total + INGEST_PROGRESS_INTERVAL;
+                        }
+                    }
+                    Err(e) => callback_err = Some(e),
+                }
+            }
+        })?;
+        if let Some(e) = callback_err {
+            return Err(e);
+        }
+        if !buffer.is_empty() {
+            total += storage.batch_upsert_redirects(&buffer)?;
+        }
+        on_progress(total);
+
+        Ok(RedirectIngestSummary {
+            entries_processed: total,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub fn resolve_redirect(&self, source: &Title) -> Result<Option<String>> {
+        self.storage.resolve_redirect(source)
+    }
+
+    pub fn count_redirects(&self) -> Result<u64> {
+        self.storage.count_redirects()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectIngestSummary {
+    pub entries_processed: u64,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
