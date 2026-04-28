@@ -109,6 +109,8 @@ export default function Settings() {
         </Row>
       </Section>
 
+      <DumpPathSection />
+
       <Section title="Storage">
         <Row label="Hot tier">
           <span className="text-sm font-mono">
@@ -169,6 +171,119 @@ function DisabledToggle({ label }: { label: string }) {
   );
 }
 
+function DumpPathSection() {
+  const [stored, setStored] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string>("");
+  const [phase, setPhase] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    tome
+      .dumpPath()
+      .then((p) => {
+        setStored(p);
+        setDraft(p ?? "");
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  async function save() {
+    if (!IS_TAURI) return;
+    setPhase("saving");
+    setError(null);
+    try {
+      const next = draft.trim().length > 0 ? draft.trim() : null;
+      await tome.setDumpPath(next);
+      setStored(next);
+      setPhase("saved");
+      setTimeout(() => setPhase("idle"), 2000);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  async function clear() {
+    if (!IS_TAURI) return;
+    setPhase("saving");
+    setError(null);
+    try {
+      await tome.setDumpPath(null);
+      setStored(null);
+      setDraft("");
+      setPhase("saved");
+      setTimeout(() => setPhase("idle"), 2000);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Dump location
+      </h3>
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
+          Tome reads articles directly from your downloaded multistream bz2
+          dump. Keep the file wherever you want — Tome only stores the path
+          and reads bytes on demand. Required for Cold-tier reads (everything
+          you haven&apos;t pulled into Hot or Warm).
+        </p>
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={phase === "saving"}
+          placeholder="/path/to/enwiki-YYYYMMDD-pages-articles-multistream.xml.bz2"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={phase === "saving" || !IS_TAURI || draft.trim() === (stored ?? "")}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "saving" ? "Saving…" : "Save"}
+            </button>
+            {stored && (
+              <button
+                type="button"
+                onClick={clear}
+                disabled={phase === "saving" || !IS_TAURI}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2 disabled:opacity-50"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-tome-muted">
+            {phase === "saved" && (
+              <span className="text-tome-success">✓ saved</span>
+            )}
+            {phase === "error" && error && (
+              <span className="text-tome-danger">{error}</span>
+            )}
+            {phase === "idle" && stored && draft.trim() === stored && (
+              <span>configured</span>
+            )}
+            {phase === "idle" && !stored && (
+              <span>not configured — Cold reads will error</span>
+            )}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function IngestSection({ onComplete }: { onComplete: () => void }) {
   const [path, setPath] = useState("");
   const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
@@ -177,6 +292,20 @@ function IngestSection({ onComplete }: { onComplete: () => void }) {
   const [count, setCount] = useState(0);
   const [summary, setSummary] = useState<IngestSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Pre-fill with the last index path the user ingested (if any), so they
+  // don't have to retype the path on every launch.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    tome
+      .lastIndexPath()
+      .then((p) => {
+        if (p) setPath(p);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+  }, []);
 
   async function handleIngest() {
     if (!IS_TAURI) {

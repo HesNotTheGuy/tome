@@ -11,5 +11,9 @@ description = "Centralized configuration, paths, and defaults for Tome."
 [dependencies]
 tome-core = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 dirs = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

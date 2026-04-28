@@ -59,6 +59,9 @@ export interface TomeService {
   ): Promise<IngestSummary>;
   fetchRevisions(title: string, limit: number): Promise<Revision[]>;
   importModuleFromPath(path: string): Promise<InstalledModule>;
+  dumpPath(): Promise<string | null>;
+  setDumpPath(path: string | null): Promise<void>;
+  lastIndexPath(): Promise<string | null>;
   healthCheck(): Promise<string>;
 }
 
@@ -114,6 +117,15 @@ export const tome: TomeService = {
   },
   importModuleFromPath(path) {
     return invoke<InstalledModule>("import_module_from_path", { path });
+  },
+  dumpPath() {
+    return invoke<string | null>("dump_path");
+  },
+  setDumpPath(path) {
+    return invoke<void>("set_dump_path", { path });
+  },
+  lastIndexPath() {
+    return invoke<string | null>("last_index_path");
   },
   async ingestIndex(path, onProgress) {
     if (!IS_TAURI) {

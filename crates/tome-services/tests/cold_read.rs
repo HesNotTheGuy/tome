@@ -9,12 +9,12 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tome_api::testing::{MockResponse, MockTransport};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient};
 use tome_archive::ArchiveStore;
+use tome_config::Settings;
 use tome_core::{Tier, Title};
-use tome_dump::DumpReader;
 use tome_dump::fixture::{PageData, build_fixture};
 use tome_modules::ModuleStore;
 use tome_search::Index as SearchIndex;
@@ -38,14 +38,13 @@ fn pages_for_test() -> Vec<PageData> {
     ]
 }
 
-fn build_facade() -> (Tome, NamedTempFile) {
+fn build_facade() -> (Tome, NamedTempFile, TempDir) {
     let fx = build_fixture(pages_for_test(), 2).unwrap();
     let mut dump_file = NamedTempFile::new().unwrap();
     dump_file.write_all(&fx.dump_bytes).unwrap();
     dump_file.flush().unwrap();
 
     let storage: Arc<dyn ArticleStore> = Arc::new(SqliteArticleStore::open_in_memory().unwrap());
-    // Seed Cold-tier metadata for both pages.
     for page in &fx.streams[0].pages {
         storage
             .upsert_metadata(&ArticleMetadata {
@@ -64,8 +63,6 @@ fn build_facade() -> (Tome, NamedTempFile) {
     let modules = Arc::new(ModuleStore::open_in_memory().unwrap());
     let search = Arc::new(SearchIndex::create_in_ram().unwrap());
 
-    // The transport will never be called once the kill switch is engaged, but
-    // we still construct it so the client builds.
     let transport = Arc::new(MockTransport::new(vec![MockResponse::ok(200, b"never")]));
     let kill = Arc::new(KillSwitch::new());
     kill.engage();
@@ -75,15 +72,30 @@ fn build_facade() -> (Tome, NamedTempFile) {
         kill,
     ));
 
-    let dump = Arc::new(DumpReader::open(dump_file.path()));
+    // Pre-seed settings.json with the temp dump path so the facade picks it
+    // up at construction.
+    let data_dir = tempfile::tempdir().unwrap();
+    Settings {
+        dump_path: Some(dump_file.path().to_path_buf()),
+        last_index_path: None,
+    }
+    .save(data_dir.path())
+    .unwrap();
 
-    let tome = Tome::new(storage, archive, modules, search, api, dump);
-    (tome, dump_file)
+    let tome = Tome::new(
+        storage,
+        archive,
+        modules,
+        search,
+        api,
+        data_dir.path().to_path_buf(),
+    );
+    (tome, dump_file, data_dir)
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_read_falls_back_to_dump_when_api_disabled() {
-    let (tome, _dump_file_keeper) = build_facade();
+    let (tome, _dump_file_keeper, _data_dir_keeper) = build_facade();
 
     let response = tome.read_article(&Title::new("Photon")).await.unwrap();
     assert_eq!(response.title, "Photon");
@@ -114,7 +126,7 @@ async fn cold_read_falls_back_to_dump_when_api_disabled() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_read_marks_links_to_known_articles_as_available() {
-    let (tome, _dump_file_keeper) = build_facade();
+    let (tome, _dump_file_keeper, _data_dir_keeper) = build_facade();
 
     // Both Photon and Electron are in the store. Cross-reference Photon's
     // body to confirm the link resolver sees both.
@@ -129,14 +141,14 @@ async fn cold_read_marks_links_to_known_articles_as_available() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_unknown_article_returns_not_found() {
-    let (tome, _dump_file_keeper) = build_facade();
+    let (tome, _dump_file_keeper, _data_dir_keeper) = build_facade();
     let err = tome.read_article(&Title::new("Cooking")).await.unwrap_err();
     assert!(matches!(err, tome_core::TomeError::NotFound(_)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_touches_access_count() {
-    let (tome, _dump_file_keeper) = build_facade();
+    let (tome, _dump_file_keeper, _data_dir_keeper) = build_facade();
 
     tome.read_article(&Title::new("Photon")).await.unwrap();
     tome.read_article(&Title::new("Photon")).await.unwrap();

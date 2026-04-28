@@ -16,7 +16,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport, Revision};
 use tome_archive::{ArchiveStore, SavedRevisionMeta};
 use tome_core::{SearchHit, Tier, Title};
-use tome_dump::DumpReader;
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{ArticleResponse, IngestSummary, TierCounts, Tome};
@@ -55,6 +54,9 @@ pub fn run() {
             ingest_index,
             fetch_revisions,
             import_module_from_path,
+            dump_path,
+            set_dump_path,
+            last_index_path,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -82,12 +84,7 @@ fn build_tome(app: &tauri::App) -> Result<Tome, Box<dyn std::error::Error>> {
         kill_switch,
     ));
 
-    // Placeholder dump path — Cold reads will error until the user points at
-    // a real multistream dump via the (forthcoming) settings UI.
-    let dump_path = data_dir.join("dump.xml.bz2");
-    let dump = Arc::new(DumpReader::open(&dump_path));
-
-    Ok(Tome::new(storage, archive, modules, search, api, dump))
+    Ok(Tome::new(storage, archive, modules, search, api, data_dir))
 }
 
 // --- Command handlers ---------------------------------------------------------
@@ -243,6 +240,24 @@ fn import_module_from_path(
     state
         .import_module_from_path(&path)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn dump_path(state: State<'_, Arc<Tome>>) -> Option<String> {
+    state.dump_path().map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn set_dump_path(path: Option<String>, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    let pb = path.map(PathBuf::from);
+    state.set_dump_path(pb).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn last_index_path(state: State<'_, Arc<Tome>>) -> Option<String> {
+    state
+        .last_index_path()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]

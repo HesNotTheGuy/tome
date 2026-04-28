@@ -51,3 +51,89 @@ impl Config {
         }
     }
 }
+
+/// Persistent user-controlled settings.
+///
+/// Lives at `<data_dir>/settings.json`. Holds paths the user has chosen for
+/// the dump and last-used index, plus future toggleable preferences. Loaded
+/// at startup, written immediately on every change so an app crash never
+/// loses the dump-path configuration.
+///
+/// All fields are `Option` so a fresh install starts blank and the UI can
+/// surface "not configured yet" states clearly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Settings {
+    /// Absolute path to the multistream bz2 dump file. Required for Cold-tier
+    /// reads.
+    #[serde(default)]
+    pub dump_path: Option<PathBuf>,
+    /// Absolute path to the last index file the user ingested. Used only as
+    /// a UI convenience (pre-fills the ingest input).
+    #[serde(default)]
+    pub last_index_path: Option<PathBuf>,
+}
+
+impl Settings {
+    pub fn settings_file(data_dir: &std::path::Path) -> PathBuf {
+        data_dir.join("settings.json")
+    }
+
+    /// Load from `<data_dir>/settings.json`. Missing file → default.
+    /// Corrupt file → default + log (non-fatal so the app always starts).
+    pub fn load(data_dir: &std::path::Path) -> Self {
+        let path = Self::settings_file(data_dir);
+        if !path.exists() {
+            return Self::default();
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Atomic-ish write: write to a temp file then rename, so a crash
+    /// mid-write doesn't leave a half-written settings.json.
+    pub fn save(&self, data_dir: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(data_dir)?;
+        let path = Self::settings_file(data_dir);
+        let tmp = path.with_extension("json.tmp");
+        let text = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into());
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn load_returns_default_when_file_absent() {
+        let dir = tempdir().unwrap();
+        let s = Settings::load(dir.path());
+        assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = tempdir().unwrap();
+        let s = Settings {
+            dump_path: Some(PathBuf::from("/some/dump.bz2")),
+            last_index_path: Some(PathBuf::from("/some/index.bz2")),
+        };
+        s.save(dir.path()).unwrap();
+        let loaded = Settings::load(dir.path());
+        assert_eq!(loaded, s);
+    }
+
+    #[test]
+    fn corrupt_file_falls_back_to_default() {
+        let dir = tempdir().unwrap();
+        std::fs::write(Settings::settings_file(dir.path()), b"not valid json").unwrap();
+        let s = Settings::load(dir.path());
+        assert_eq!(s, Settings::default());
+    }
+}

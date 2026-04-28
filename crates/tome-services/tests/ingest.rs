@@ -9,12 +9,12 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tome_api::testing::MockTransport;
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient};
 use tome_archive::ArchiveStore;
+use tome_config::Settings;
 use tome_core::Title;
-use tome_dump::DumpReader;
 use tome_dump::fixture::{PageData, build_fixture};
 use tome_modules::ModuleStore;
 use tome_search::Index as SearchIndex;
@@ -32,7 +32,7 @@ fn pages() -> Vec<PageData> {
         .collect()
 }
 
-fn build_facade() -> (Tome, NamedTempFile, NamedTempFile) {
+fn build_facade() -> (Tome, NamedTempFile, NamedTempFile, TempDir) {
     let fx = build_fixture(pages(), 10).unwrap();
     let mut dump_file = NamedTempFile::new().unwrap();
     dump_file.write_all(&fx.dump_bytes).unwrap();
@@ -53,18 +53,32 @@ fn build_facade() -> (Tome, NamedTempFile, NamedTempFile) {
         transport,
         kill,
     ));
-    let dump = Arc::new(DumpReader::open(dump_file.path()));
+
+    let data_dir = tempfile::tempdir().unwrap();
+    Settings {
+        dump_path: Some(dump_file.path().to_path_buf()),
+        last_index_path: None,
+    }
+    .save(data_dir.path())
+    .unwrap();
 
     // Skip the API attempt for Cold reads so the test doesn't burn the
     // full backoff schedule against the empty MockTransport.
-    let tome =
-        Tome::new(storage, archive, modules, search, api, dump).with_prefer_api_for_cold(false);
-    (tome, dump_file, index_file)
+    let tome = Tome::new(
+        storage,
+        archive,
+        modules,
+        search,
+        api,
+        data_dir.path().to_path_buf(),
+    )
+    .with_prefer_api_for_cold(false);
+    (tome, dump_file, index_file, data_dir)
 }
 
 #[test]
 fn ingest_populates_cold_tier_for_every_index_entry() {
-    let (tome, _dump, index) = build_facade();
+    let (tome, _dump, index, _data_dir) = build_facade();
     let progress_calls = AtomicU64::new(0);
     let summary = tome
         .ingest_index(index.path(), |_count| {
@@ -84,7 +98,7 @@ fn ingest_populates_cold_tier_for_every_index_entry() {
 
 #[test]
 fn ingest_then_lookup_reads_back_a_seeded_article() {
-    let (tome, _dump, index) = build_facade();
+    let (tome, _dump, index, _data_dir) = build_facade();
     tome.ingest_index(index.path(), |_| {}).unwrap();
 
     // Use the search facility to confirm the article landed.
@@ -103,7 +117,7 @@ fn ingest_then_lookup_reads_back_a_seeded_article() {
 
 #[test]
 fn re_ingest_updates_existing_offsets_in_place() {
-    let (tome, _dump, index) = build_facade();
+    let (tome, _dump, index, _data_dir) = build_facade();
     tome.ingest_index(index.path(), |_| {}).unwrap();
     let first = tome.tier_counts().unwrap().cold;
 

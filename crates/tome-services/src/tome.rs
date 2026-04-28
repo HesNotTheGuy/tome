@@ -1,12 +1,13 @@
 //! The `Tome` facade — the only public surface the UI depends on.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tome_api::{MediaWikiClient, Revision};
 use tome_archive::ArchiveStore;
+use tome_config::Settings;
 use tome_core::{Result, SearchHit, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
@@ -45,7 +46,14 @@ pub struct Tome {
     modules: Arc<ModuleStore>,
     search: Arc<SearchIndex>,
     api: Arc<MediaWikiClient>,
-    dump: Arc<DumpReader>,
+    /// Where the user has pointed Tome for the multistream dump.
+    /// `None` means the user hasn't configured one yet — Cold reads error
+    /// with a helpful message rather than failing on a stale path.
+    dump_path: Arc<RwLock<Option<PathBuf>>>,
+    /// Where settings.json lives. Reading is via [`Settings::load`], writing
+    /// happens whenever a path changes so we never lose configuration on
+    /// crash.
+    data_dir: PathBuf,
     /// Whether to attempt API-cached Parsoid HTML for Cold reads. When
     /// false (or when the API call fails), we render locally from the dump.
     prefer_api_for_cold: bool,
@@ -58,15 +66,17 @@ impl Tome {
         modules: Arc<ModuleStore>,
         search: Arc<SearchIndex>,
         api: Arc<MediaWikiClient>,
-        dump: Arc<DumpReader>,
+        data_dir: PathBuf,
     ) -> Self {
+        let settings = Settings::load(&data_dir);
         Self {
             storage,
             archive,
             modules,
             search,
             api,
-            dump,
+            dump_path: Arc::new(RwLock::new(settings.dump_path)),
+            data_dir,
             prefer_api_for_cold: true,
         }
     }
@@ -74,6 +84,17 @@ impl Tome {
     pub fn with_prefer_api_for_cold(mut self, prefer: bool) -> Self {
         self.prefer_api_for_cold = prefer;
         self
+    }
+
+    fn settings(&self) -> Settings {
+        Settings::load(&self.data_dir)
+    }
+
+    fn save_settings(&self, mutator: impl FnOnce(&mut Settings)) -> Result<()> {
+        let mut s = self.settings();
+        mutator(&mut s);
+        s.save(&self.data_dir)
+            .map_err(|e| TomeError::Other(format!("save settings: {e}")))
     }
 
     fn renderer(&self) -> Renderer {
@@ -164,7 +185,19 @@ impl Tome {
                 }
             }
         }
-        let bytes = self.dump.read_stream(stream_offset, stream_length)?;
+        let dump_path = self
+            .dump_path
+            .read()
+            .map_err(|e| TomeError::Other(format!("dump path lock poisoned: {e}")))?
+            .clone()
+            .ok_or_else(|| {
+                TomeError::Other(
+                    "dump path not configured — set it in Settings before reading Cold articles"
+                        .to_string(),
+                )
+            })?;
+        let dump = DumpReader::open(&dump_path);
+        let bytes = dump.read_stream(stream_offset, stream_length)?;
         let pages = parse_pages(&bytes)?;
         let page = pages.iter().find(|p| p.page_id == page_id).ok_or_else(|| {
             TomeError::Dump(format!(
@@ -286,6 +319,27 @@ impl Tome {
         tome_config::DEFAULT_USER_AGENT
     }
 
+    /// Current dump file path (if configured).
+    pub fn dump_path(&self) -> Option<PathBuf> {
+        self.dump_path.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Configure (or clear) the dump file path. Persisted to settings.json
+    /// immediately so the value survives the next launch.
+    pub fn set_dump_path(&self, path: Option<PathBuf>) -> Result<()> {
+        *self
+            .dump_path
+            .write()
+            .map_err(|e| TomeError::Other(format!("dump path lock poisoned: {e}")))? = path.clone();
+        self.save_settings(|s| s.dump_path = path)
+    }
+
+    /// The last index path the user ingested, if any. Used by the UI to
+    /// pre-fill the ingest input on subsequent launches.
+    pub fn last_index_path(&self) -> Option<PathBuf> {
+        self.settings().last_index_path
+    }
+
     pub fn tier_counts(&self) -> Result<TierCounts> {
         Ok(TierCounts {
             hot: self.storage.count_by_tier(Tier::Hot)?,
@@ -333,6 +387,9 @@ impl Tome {
             total += n;
         }
         on_progress(total);
+
+        // Remember the index path so the UI can pre-fill it next launch.
+        let _ = self.save_settings(|s| s.last_index_path = Some(index_path.to_path_buf()));
 
         Ok(IngestSummary {
             entries_processed: total,
