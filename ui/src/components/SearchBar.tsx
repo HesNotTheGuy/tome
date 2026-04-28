@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { tome } from "../service";
-import { IS_TAURI, SearchHit, Tier } from "../types";
+import { isTauri, SearchHit, Tier } from "../types";
 
 interface SearchBarProps {
   onOpenArticle: (title: string) => void;
@@ -50,7 +50,7 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
       setHits([]);
       return;
     }
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       setHits([
         {
           page_id: 0,

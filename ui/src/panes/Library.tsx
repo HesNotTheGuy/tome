@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { tome } from "../service";
-import { InstalledModule, IS_TAURI } from "../types";
+import { InstalledModule, isTauri } from "../types";
 
 interface LibraryProps {
   onOpen: (title: string) => void;
@@ -12,7 +12,7 @@ export default function Library({ onOpen }: LibraryProps) {
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(() => {
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       setLoaded(true);
       return;
     }
@@ -38,7 +38,7 @@ export default function Library({ onOpen }: LibraryProps) {
         </div>
       </div>
 
-      {!IS_TAURI && (
+      {!isTauri() && (
         <div className="p-4 mb-6 rounded border border-tome-border bg-tome-surface-2 text-sm">
           Running outside the Tauri shell — backend not connected. Launch via{" "}
           <code className="px-1.5 py-0.5 rounded bg-tome-surface">
@@ -115,7 +115,7 @@ function ImportSection({ onComplete }: { onComplete: () => void }) {
   const [installed, setInstalled] = useState<InstalledModule | null>(null);
 
   async function handleImport() {
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       setError("import requires the Tauri shell");
       setPhase("error");
       return;
@@ -165,7 +165,7 @@ function ImportSection({ onComplete }: { onComplete: () => void }) {
         <button
           type="button"
           onClick={handleImport}
-          disabled={phase === "running" || !IS_TAURI}
+          disabled={phase === "running" || !isTauri()}
           className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ backgroundColor: "var(--tome-accent)" }}
         >

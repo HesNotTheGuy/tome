@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { IngestSummary, IS_TAURI, TierCounts } from "../types";
+import { IngestSummary, isTauri, TierCounts } from "../types";
 
 interface SettingsState {
   killSwitch: boolean;
@@ -21,7 +21,7 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     try {
       const [killSwitch, breakerOpen, userAgent, tierCounts] = await Promise.all([
         tome.killSwitchEngaged(),
@@ -44,7 +44,7 @@ export default function Settings() {
   }, []);
 
   async function toggleKillSwitch() {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     const next = !state.killSwitch;
     try {
       await tome.setKillSwitch(next);
@@ -62,7 +62,7 @@ export default function Settings() {
         features ship (dump path, ingestion, schedules, debug log).
       </p>
 
-      {!IS_TAURI && (
+      {!isTauri() && (
         <div className="p-4 mb-6 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 text-sm">
           Running outside the Tauri shell — values are placeholders.
         </div>
@@ -79,7 +79,7 @@ export default function Settings() {
           <button
             type="button"
             onClick={toggleKillSwitch}
-            disabled={!IS_TAURI}
+            disabled={!isTauri()}
             className={
               "px-3 py-1 text-sm rounded transition-colors " +
               (state.killSwitch
@@ -180,7 +180,7 @@ function DumpPathSection() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     tome
       .dumpPath()
       .then((p) => {
@@ -191,7 +191,7 @@ function DumpPathSection() {
   }, []);
 
   async function save() {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     setPhase("saving");
     setError(null);
     try {
@@ -207,7 +207,7 @@ function DumpPathSection() {
   }
 
   async function clear() {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     setPhase("saving");
     setError(null);
     try {
@@ -247,7 +247,7 @@ function DumpPathSection() {
             <button
               type="button"
               onClick={save}
-              disabled={phase === "saving" || !IS_TAURI || draft.trim() === (stored ?? "")}
+              disabled={phase === "saving" || !isTauri() || draft.trim() === (stored ?? "")}
               className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ backgroundColor: "var(--tome-accent)" }}
             >
@@ -257,7 +257,7 @@ function DumpPathSection() {
               <button
                 type="button"
                 onClick={clear}
-                disabled={phase === "saving" || !IS_TAURI}
+                disabled={phase === "saving" || !isTauri()}
                 className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2 disabled:opacity-50"
               >
                 Clear
@@ -296,7 +296,7 @@ function IngestSection({ onComplete }: { onComplete: () => void }) {
   // Pre-fill with the last index path the user ingested (if any), so they
   // don't have to retype the path on every launch.
   useEffect(() => {
-    if (!IS_TAURI) return;
+    if (!isTauri()) return;
     tome
       .lastIndexPath()
       .then((p) => {
@@ -308,7 +308,7 @@ function IngestSection({ onComplete }: { onComplete: () => void }) {
   }, []);
 
   async function handleIngest() {
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       setError("ingestion requires the Tauri shell");
       setPhase("error");
       return;
@@ -361,7 +361,7 @@ function IngestSection({ onComplete }: { onComplete: () => void }) {
           <button
             type="button"
             onClick={handleIngest}
-            disabled={phase === "running" || !IS_TAURI}
+            disabled={phase === "running" || !isTauri()}
             className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed"
           >
             {phase === "running"

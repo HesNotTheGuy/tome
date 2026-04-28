@@ -5,11 +5,12 @@
 // in one place and lets us mock cleanly in dev sessions outside a Tauri
 // shell.
 
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
 import {
   ArticleResponse,
   IngestSummary,
   InstalledModule,
-  IS_TAURI,
   ModuleSpec,
   Revision,
   SavedRevisionMeta,
@@ -18,20 +19,11 @@ import {
   TierCounts,
 } from "./types";
 
-type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
-
-let invoke: InvokeFn = async () => {
-  throw new Error(
-    "Tauri bridge not initialized — running outside a Tauri shell?",
-  );
-};
-
-if (IS_TAURI) {
-  // Lazy import so a browser-only dev session doesn't fail at module load.
-  void import("@tauri-apps/api/core").then((mod) => {
-    invoke = mod.invoke as InvokeFn;
-  });
-}
+// `invoke` is statically imported. If we're in a browser context (no Tauri
+// bridge), the underlying call throws with Tauri's own error string at the
+// moment of invocation — there's no race with a lazy import.
+const invoke = <T>(cmd: string, args?: Record<string, unknown>): Promise<T> =>
+  tauriInvoke<T>(cmd, args);
 
 export interface TomeService {
   readArticle(title: string): Promise<ArticleResponse>;
@@ -128,9 +120,6 @@ export const tome: TomeService = {
     return invoke<string | null>("last_index_path");
   },
   async ingestIndex(path, onProgress) {
-    if (!IS_TAURI) {
-      throw new Error("ingest requires the Tauri shell");
-    }
     const eventMod = await import("@tauri-apps/api/event");
     const unlisten = await eventMod.listen<number>("ingest:progress", (e) => {
       onProgress(e.payload);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { IS_TAURI, SavedRevisionMeta } from "../types";
+import { isTauri, SavedRevisionMeta } from "../types";
 
 interface ArchiveProps {
   onOpen: (title: string) => void;
@@ -13,7 +13,7 @@ export default function Archive({ onOpen }: ArchiveProps) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       setLoaded(true);
       return;
     }
@@ -43,7 +43,7 @@ export default function Archive({ onOpen }: ArchiveProps) {
         className="w-full px-3 py-2 mb-4 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
 
-      {!IS_TAURI && (
+      {!isTauri() && (
         <div className="p-4 mb-4 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 text-sm">
           Running outside the Tauri shell — backend not connected.
         </div>

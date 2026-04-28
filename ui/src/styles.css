@@ -195,3 +195,269 @@
     @apply font-semibold;
   }
 }
+
+/* -------------------------------------------------------------------------
+ * Wikipedia article HTML overrides.
+ *
+ * The Reader's `served from ApiCachedHtml` path injects raw Parsoid HTML
+ * from Wikipedia's REST endpoint. That HTML expects MediaWiki's vector or
+ * minerva skin to provide hundreds of CSS rules for infoboxes, navboxes,
+ * thumbnails, references, etc. — and we ship none of them.
+ *
+ * Rather than bundle MediaWiki's stylesheet (heavy, fights our themes), we
+ * style the most common Wikipedia classes in our own visual language.
+ * Themed via the same CSS variables as the rest of the app, so a Codex
+ * preset gets parchment infoboxes, Library gets neutral, etc.
+ * ----------------------------------------------------------------------- */
+
+@layer components {
+  /* Force every text-bearing element inside the article to use our theme
+   * colors. Wikipedia's HTML occasionally hardcodes black via inline styles
+   * on small spans; this overrides them safely. */
+  .tome-article,
+  .tome-article p,
+  .tome-article li,
+  .tome-article dd,
+  .tome-article dt,
+  .tome-article td,
+  .tome-article th,
+  .tome-article div,
+  .tome-article span,
+  .tome-article figcaption {
+    color: var(--tome-text);
+  }
+  .tome-article a {
+    color: var(--tome-link);
+    text-decoration: none;
+  }
+  .tome-article a:hover {
+    text-decoration: underline;
+  }
+  .tome-article a.new,
+  .tome-article a[href^="/w/index.php?"] {
+    /* "Red links" — articles that don't exist on Wikipedia */
+    color: var(--tome-link-missing);
+    font-style: italic;
+  }
+  .tome-article a.external {
+    color: var(--tome-link-external);
+  }
+
+  /* Hatnote — the "For other uses, see X" italic header */
+  .tome-article .hatnote,
+  .tome-article .dablink,
+  .tome-article .rellink {
+    @apply text-sm italic pl-4 my-2;
+    color: var(--tome-text-muted);
+    border-left: 2px solid var(--tome-border);
+  }
+
+  /* Section heading classes from skin */
+  .tome-article .mw-heading,
+  .tome-article .mw-headline {
+    color: var(--tome-text);
+  }
+  .tome-article .mw-editsection,
+  .tome-article .mw-editsection-bracket,
+  .tome-article .mw-editsection-divider {
+    /* "edit" links next to section headings — useless without a logged-in
+     * editor, hide them. */
+    display: none;
+  }
+
+  /* Infobox — the right-hand fact card */
+  .tome-article .infobox {
+    background-color: var(--tome-surface);
+    color: var(--tome-text);
+    border: 1px solid var(--tome-border);
+    border-collapse: collapse;
+    margin: 0 0 1rem 1rem;
+    float: right;
+    max-width: 22rem;
+    width: 100%;
+    @apply rounded text-sm;
+  }
+  @media (max-width: 720px) {
+    .tome-article .infobox {
+      float: none;
+      margin: 1rem 0;
+      max-width: 100%;
+    }
+  }
+  .tome-article .infobox th,
+  .tome-article .infobox td {
+    background-color: transparent !important;
+    color: var(--tome-text) !important;
+    border-bottom: 1px solid var(--tome-border);
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  .tome-article .infobox-above,
+  .tome-article .infobox-title,
+  .tome-article .infobox-header {
+    background-color: var(--tome-surface-2) !important;
+    color: var(--tome-text) !important;
+    font-weight: 600;
+    text-align: center !important;
+    padding: 0.5rem !important;
+  }
+  .tome-article .infobox caption {
+    background-color: var(--tome-surface-2);
+    padding: 0.5rem;
+    font-weight: 600;
+  }
+  .tome-article .infobox img {
+    height: auto;
+    max-width: 100%;
+  }
+
+  /* Thumbnails / image frames */
+  .tome-article .thumb,
+  .tome-article figure {
+    @apply my-3 rounded;
+    background-color: var(--tome-surface);
+    border: 1px solid var(--tome-border);
+    padding: 0.5rem;
+    max-width: 100%;
+  }
+  .tome-article .thumb.tright,
+  .tome-article figure.mw-default-size {
+    float: right;
+    margin: 0 0 1rem 1rem;
+    max-width: 18rem;
+  }
+  .tome-article .thumb.tleft {
+    float: left;
+    margin: 0 1rem 1rem 0;
+    max-width: 18rem;
+  }
+  .tome-article .thumb img,
+  .tome-article figure img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+  .tome-article .thumbcaption,
+  .tome-article figcaption {
+    @apply text-xs mt-1;
+    color: var(--tome-text-muted);
+  }
+
+  /* Generic Wikipedia tables */
+  .tome-article table.wikitable,
+  .tome-article table.toccolours {
+    background-color: var(--tome-surface);
+    color: var(--tome-text);
+    border: 1px solid var(--tome-border);
+    border-collapse: collapse;
+    @apply my-4 text-sm;
+  }
+  .tome-article table.wikitable th,
+  .tome-article table.toccolours th {
+    background-color: var(--tome-surface-2) !important;
+    color: var(--tome-text) !important;
+    border: 1px solid var(--tome-border);
+    padding: 0.4rem 0.6rem;
+    font-weight: 600;
+    text-align: left;
+  }
+  .tome-article table.wikitable td,
+  .tome-article table.toccolours td {
+    background-color: transparent !important;
+    color: var(--tome-text) !important;
+    border: 1px solid var(--tome-border);
+    padding: 0.4rem 0.6rem;
+  }
+
+  /* Navbox (the big footer navigation tables) — collapsed by default
+   * on Wikipedia; we hide them entirely. They're navigation aids that
+   * don't translate well to an offline reader. */
+  .tome-article .navbox,
+  .tome-article .navbox-inner,
+  .tome-article .vertical-navbox {
+    display: none;
+  }
+
+  /* References / footnote section */
+  .tome-article .references,
+  .tome-article .reflist,
+  .tome-article ol.references {
+    @apply text-sm pl-6 mt-4;
+    color: var(--tome-text-muted);
+  }
+  .tome-article .references li,
+  .tome-article .reflist li {
+    margin: 0.25rem 0;
+  }
+  .tome-article sup.reference {
+    @apply text-xs;
+    color: var(--tome-link);
+  }
+
+  /* Inline blockquotes / pull quotes */
+  .tome-article blockquote {
+    @apply pl-4 my-3 italic;
+    border-left: 3px solid var(--tome-border);
+    color: var(--tome-text-muted);
+  }
+
+  /* Code blocks */
+  .tome-article code,
+  .tome-article pre,
+  .tome-article tt {
+    background-color: var(--tome-surface-2);
+    color: var(--tome-text);
+    @apply rounded px-1 py-0.5 text-sm;
+    font-family: var(--tome-font-mono);
+  }
+  .tome-article pre {
+    @apply p-3 my-3 overflow-x-auto;
+  }
+
+  /* Mathematics — Wikipedia uses MathJax-rendered SVGs and span-based
+   * fallbacks. Make sure they're visible. */
+  .tome-article .mwe-math-element,
+  .tome-article .texhtml {
+    color: var(--tome-text);
+  }
+
+  /* "Coordinates" inline display in geography articles */
+  .tome-article .geo,
+  .tome-article .geo-default,
+  .tome-article #coordinates {
+    color: var(--tome-link);
+    @apply text-sm;
+  }
+
+  /* "Related changes", "What links here" — internal MediaWiki navigation
+   * that doesn't apply offline. Hide. */
+  .tome-article .printfooter,
+  .tome-article .mw-jump-link,
+  .tome-article .mw-cite-backlink,
+  .tome-article .mw-redirect {
+    color: inherit;
+  }
+  .tome-article .printfooter,
+  .tome-article .mw-jump-link {
+    display: none;
+  }
+
+  /* Citation needed / clarification needed — keep visible but de-emphasized */
+  .tome-article .Inline-Template,
+  .tome-article .noprint {
+    color: var(--tome-text-muted);
+    @apply text-xs;
+  }
+
+  /* Box messages (warnings, factual disputes) — render as styled callouts */
+  .tome-article .ambox,
+  .tome-article .messagebox,
+  .tome-article .mbox-text {
+    background-color: var(--tome-surface);
+    color: var(--tome-text);
+    border: 1px solid var(--tome-border);
+    border-left: 3px solid var(--tome-link);
+    @apply my-3 p-3 text-sm rounded;
+  }
+}

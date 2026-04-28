@@ -80,5 +80,15 @@ export interface Revision {
   comment: string;
 }
 
-/** Whether we're running inside a Tauri WebView vs. a browser-only dev session. */
-export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/**
+ * Whether we're running inside a Tauri WebView vs. a browser-only dev session.
+ *
+ * Evaluated at *call time* rather than module load — Tauri 2 injects its
+ * globals during page setup but our React bundle may evaluate first, so a
+ * captured const would lock in the wrong answer.
+ */
+export function isTauri(): boolean {
+  if (typeof window === "undefined") return false;
+  // Tauri 2 (current) and Tauri 1 (fallback) globals.
+  return "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+}

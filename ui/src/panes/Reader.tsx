@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { ArticleResponse, IS_TAURI, Revision } from "../types";
+import { ArticleResponse, isTauri, Revision } from "../types";
 import Timeline from "../components/Timeline";
 
 interface ReaderProps {
@@ -21,7 +21,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       setResponse(null);
       return;
     }
-    if (!IS_TAURI) {
+    if (!isTauri()) {
       // Demo content when no backend is connected.
       setResponse({
         title,
@@ -43,7 +43,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
   }, [title]);
 
   async function loadRevisions() {
-    if (!title || !IS_TAURI) return;
+    if (!title || !isTauri()) return;
     setRevLoading(true);
     setRevError(null);
     try {
@@ -56,32 +56,62 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
     }
   }
 
-  // Internal links in the rendered HTML use `#/article/{slug}`. Catch them and
-  // navigate without leaving the SPA.
+  // Comprehensive link interception. Wikipedia's API HTML uses several
+  // different formats; we route every recognized pattern to the Reader and
+  // open every other http(s) link in the system browser via Tauri's shell
+  // plugin. **We always preventDefault on anchor clicks within the article**
+  // so the WebView never silently navigates away from our app. (A backend
+  // navigation guard is the second line of defense.)
   useEffect(() => {
-    function onClick(e: MouseEvent) {
+    async function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
       const anchor = target.closest("a");
       if (!anchor) return;
+
+      // Don't intercept clicks outside the article container — we want the
+      // search dropdown, nav buttons, and theme toggle to behave normally.
+      if (!anchor.closest(".tome-article, .tome-link-handler")) return;
+
       const href = anchor.getAttribute("href");
       if (!href) return;
-      const m = href.match(/^#\/article\/(.+)$/);
-      if (!m) return;
+
+      // In-page anchor (e.g., #section-foo) — let the browser scroll, no
+      // hijack.
+      if (href.startsWith("#") && !href.startsWith("#/")) return;
+
       e.preventDefault();
-      const slug = decodeURIComponent(m[1] ?? "").replace(/_/g, " ");
-      onNavigate(slug);
+      e.stopPropagation();
+
+      const target_title = articleTitleFromHref(href);
+      if (target_title) {
+        onNavigate(target_title);
+        return;
+      }
+
+      // External link — open in the user's default browser, never inside
+      // our WebView.
+      if (/^(https?:)?\/\//.test(href)) {
+        try {
+          const { open } = await import("@tauri-apps/plugin-shell");
+          // Make protocol-relative URLs absolute.
+          const url = href.startsWith("//") ? `https:${href}` : href;
+          await open(url);
+        } catch {
+          /* shell plugin not available — fail silently rather than crash */
+        }
+      }
+      // Anything else (mailto:, javascript:, etc.) is silently ignored.
     }
-    document.addEventListener("click", onClick);
-    return () => document.removeEventListener("click", onClick);
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
   }, [onNavigate]);
 
   if (!title) {
     return (
-      <div className="px-6 py-10 max-w-3xl mx-auto text-center text-zinc-500 dark:text-zinc-400">
-        <h2 className="text-xl font-semibold mb-2">No article open</h2>
+      <div className="px-6 py-10 max-w-3xl mx-auto text-center text-tome-muted">
+        <h2 className="text-xl font-semibold mb-2 text-tome-text">No article open</h2>
         <p className="text-sm">
-          Open one from the Library, or search the corpus from the search bar
-          (Ctrl/⌘ + K, once it lands).
+          Type any article title in the search bar (Ctrl/⌘ + K) and hit Enter.
         </p>
       </div>
     );
@@ -95,8 +125,10 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
           backgroundColor: "color-mix(in srgb, var(--tome-surface) 80%, transparent)",
         }}
       >
-        <div className="flex-1">
-          <h1 className="text-xl font-bold">{response?.title ?? title}</h1>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold text-tome-text truncate">
+            {response?.title ?? title}
+          </h1>
           {response?.source && (
             <p className="text-xs text-tome-muted">
               served from <code>{response.source}</code>
@@ -112,7 +144,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
         <button
           type="button"
           onClick={loadRevisions}
-          disabled={!IS_TAURI || revLoading}
+          disabled={!isTauri() || revLoading}
           className="text-xs px-2 py-1 rounded border border-tome-border hover:bg-tome-surface-2 text-tome-muted disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {revLoading
@@ -159,6 +191,49 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       )}
     </div>
   );
+}
+
+/**
+ * Extract a Wikipedia article title from an `<a href>` value. Returns null
+ * if the link is to anything other than an article on Wikipedia.
+ *
+ * Recognized patterns:
+ *   - `#/article/Photon`                 (our local renderer's format)
+ *   - `/wiki/Photon`                     (Wikipedia relative)
+ *   - `//en.wikipedia.org/wiki/Photon`   (Wikipedia protocol-relative)
+ *   - `https://en.wikipedia.org/wiki/X`  (Wikipedia absolute)
+ *   - `./Photon`                         (Parsoid's relative-to-page form)
+ *
+ * Strips trailing fragments (#section). Decodes percent-encoding. Converts
+ * underscores to spaces (Wikipedia URL convention).
+ */
+function articleTitleFromHref(href: string): string | null {
+  // Our own format
+  let m = href.match(/^#\/article\/([^?]+)$/);
+  if (m) return cleanTitle(m[1]!);
+
+  // Strip query and fragment for the rest.
+  const cleaned = href.split("#")[0]!.split("?")[0]!;
+
+  // Parsoid relative form: ./Photon
+  m = cleaned.match(/^\.\/(.+)$/);
+  if (m) return cleanTitle(m[1]!);
+
+  // Wikipedia URL forms (relative, protocol-relative, absolute, any language).
+  m = cleaned.match(
+    /^(?:https?:)?\/\/[a-z-]+\.(?:m\.)?wikipedia\.org\/wiki\/(.+)$/i,
+  );
+  if (m) return cleanTitle(m[1]!);
+
+  // Pure relative wiki path
+  m = cleaned.match(/^\/wiki\/(.+)$/);
+  if (m) return cleanTitle(m[1]!);
+
+  return null;
+}
+
+function cleanTitle(raw: string): string {
+  return decodeURIComponent(raw).replace(/_/g, " ");
 }
 
 function demoHtml(title: string): string {
