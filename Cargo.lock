@@ -4992,6 +4992,7 @@ name = "tome-services"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "flate2",
  "serde",
  "serde_json",
  "tempfile",

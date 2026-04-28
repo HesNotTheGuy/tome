@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { ArticleResponse, isTauri, Revision } from "../types";
+import { ArticleResponse, Geotag, isTauri, Revision } from "../types";
 import Timeline from "../components/Timeline";
 
 interface ReaderProps {
@@ -15,6 +15,29 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
   const [revisions, setRevisions] = useState<Revision[] | null>(null);
   const [revLoading, setRevLoading] = useState(false);
   const [revError, setRevError] = useState<string | null>(null);
+  const [geotag, setGeotag] = useState<Geotag | null>(null);
+
+  // Look up the geotag for the current article (if any) when the title
+  // changes. Silent failures — if we have no geotags ingested or the
+  // article has none, just don't render the coords badge.
+  useEffect(() => {
+    if (!title || !isTauri()) {
+      setGeotag(null);
+      return;
+    }
+    let canceled = false;
+    tome
+      .geotagForTitle(title)
+      .then((g) => {
+        if (!canceled) setGeotag(g);
+      })
+      .catch(() => {
+        if (!canceled) setGeotag(null);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [title]);
 
   useEffect(() => {
     if (!title) {
@@ -140,6 +163,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
               )}
             </p>
           )}
+          {geotag && <CoordsBadge geotag={geotag} />}
         </div>
         <button
           type="button"
@@ -234,6 +258,34 @@ function articleTitleFromHref(href: string): string | null {
 
 function cleanTitle(raw: string): string {
   return decodeURIComponent(raw).replace(/_/g, " ");
+}
+
+function CoordsBadge({ geotag }: { geotag: Geotag }) {
+  // Format as compact DMS-ish: "42.50° N · 71.00° W"
+  const lat = `${Math.abs(geotag.lat).toFixed(2)}° ${geotag.lat >= 0 ? "N" : "S"}`;
+  const lon = `${Math.abs(geotag.lon).toFixed(2)}° ${geotag.lon >= 0 ? "E" : "W"}`;
+  // Also produce an OSM URL the user can click to open the location in
+  // their default browser.
+  const osm = `https://www.openstreetmap.org/?mlat=${geotag.lat}&mlon=${geotag.lon}#map=10/${geotag.lat}/${geotag.lon}`;
+  return (
+    <p className="text-xs text-tome-muted mt-1 tome-link-handler">
+      📍{" "}
+      <a
+        href={osm}
+        title="Open in OpenStreetMap"
+        className="text-tome-link hover:underline"
+      >
+        <code>
+          {lat} · {lon}
+        </code>
+      </a>
+      {geotag.kind && (
+        <span className="ml-2 px-1.5 py-0.5 rounded bg-tome-surface-2 text-[10px] uppercase tracking-wide">
+          {geotag.kind}
+        </span>
+      )}
+    </p>
+  );
 }
 
 function demoHtml(title: string): string {

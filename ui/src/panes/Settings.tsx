@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { IngestSummary, isTauri, TierCounts } from "../types";
+import { GeotagSummary, IngestSummary, isTauri, TierCounts } from "../types";
 
 interface SettingsState {
   killSwitch: boolean;
@@ -136,6 +136,7 @@ export default function Settings() {
 
       <IngestSection onComplete={refresh} />
 
+      <GeotagSection />
 
       <Section title="AI features (experimental)">
         <Row label="Master switch">
@@ -415,6 +416,110 @@ function Row({
     <div className="flex items-center justify-between gap-4 px-4 py-3">
       <span className="text-sm text-zinc-700 dark:text-zinc-300">{label}</span>
       <div>{children}</div>
+    </div>
+  );
+}
+
+function GeotagSection() {
+  const [path, setPath] = useState("");
+  const [count, setCount] = useState<number | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
+    "idle",
+  );
+  const [progress, setProgress] = useState(0);
+  const [summary, setSummary] = useState<GeotagSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome.countGeotags().then(setCount).catch(() => setCount(null));
+  }, []);
+
+  async function handleIngest() {
+    if (!isTauri()) {
+      setError("requires the Tauri shell");
+      setPhase("error");
+      return;
+    }
+    if (!path.trim()) {
+      setError("paste the path to a geo_tags.sql.gz file");
+      setPhase("error");
+      return;
+    }
+    setPhase("running");
+    setProgress(0);
+    setError(null);
+    setSummary(null);
+    try {
+      const result = await tome.ingestGeotags(path.trim(), (n) =>
+        setProgress(n),
+      );
+      setSummary(result);
+      setPhase("done");
+      const updated = await tome.countGeotags();
+      setCount(updated);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Geotag ingestion
+      </h3>
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
+          Optional. Point Tome at a downloaded{" "}
+          <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+            *-geo_tags.sql.gz
+          </code>{" "}
+          to attach geographic coordinates to articles. Tiny file (~1 MB
+          simple, ~50 MB enwiki). Once ingested, the Reader shows
+          coordinates on geographic articles.
+        </p>
+        <div className="flex items-center justify-between text-xs text-tome-muted">
+          <span>
+            Currently stored:{" "}
+            <span className="font-mono text-tome-text">
+              {count?.toLocaleString() ?? "—"}
+            </span>{" "}
+            geotags
+          </span>
+        </div>
+
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={phase === "running"}
+          placeholder="/path/to/simplewiki-latest-geo_tags.sql.gz"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleIngest}
+            disabled={phase === "running" || !isTauri()}
+            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            {phase === "running"
+              ? `Ingesting… ${progress.toLocaleString()}`
+              : "Ingest geotags"}
+          </button>
+          {phase === "done" && summary && (
+            <span className="text-xs text-tome-success">
+              ✓ {summary.entries_processed.toLocaleString()} geotags in{" "}
+              {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

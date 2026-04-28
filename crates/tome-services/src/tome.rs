@@ -12,7 +12,7 @@ use tome_core::{Result, SearchHit, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
-use tome_storage::{ArticleContent, ArticleStore};
+use tome_storage::{ArticleContent, ArticleStore, Geotag};
 use tome_wikitext::Renderer;
 
 use crate::link_resolver::StorageLinkResolver;
@@ -420,6 +420,56 @@ impl Tome {
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
     }
+
+    /// Stream-parse a Wikipedia `geo_tags.sql.gz` and bulk-insert each row
+    /// as a `geotags` record. Tiny relative to the article dump (~50 MB
+    /// compressed for enwiki, low MB for simplewiki) so we collect into
+    /// memory and batch upsert.
+    pub fn ingest_geotags<F>(&self, path: &Path, mut on_progress: F) -> Result<GeotagSummary>
+    where
+        F: FnMut(u64),
+    {
+        let started = Instant::now();
+        let mut all: Vec<Geotag> = Vec::new();
+        crate::geotag_ingest::parse_file(path, |g| all.push(g))?;
+
+        let mut total = 0_u64;
+        let mut next_progress = 10_000_u64;
+        for chunk in all.chunks(5_000) {
+            total += self.storage.batch_upsert_geotags(chunk)?;
+            if total >= next_progress {
+                on_progress(total);
+                next_progress = total + 10_000;
+            }
+        }
+        on_progress(total);
+
+        Ok(GeotagSummary {
+            entries_processed: total,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// Look up the geographic coordinate for an article by title. Returns
+    /// `None` if the article has no geotag, or if the article isn't in
+    /// storage at all (e.g., user is reading via the API fallback path
+    /// before ingestion).
+    pub fn geotag_for_title(&self, title: &Title) -> Result<Option<Geotag>> {
+        let Some(rec) = self.storage.lookup(title)? else {
+            return Ok(None);
+        };
+        self.storage.geotag_for(rec.metadata.page_id)
+    }
+
+    pub fn count_geotags(&self) -> Result<u64> {
+        self.storage.count_geotags()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeotagSummary {
+    pub entries_processed: u64,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

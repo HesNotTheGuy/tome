@@ -80,6 +80,19 @@ export interface Revision {
   comment: string;
 }
 
+export interface Geotag {
+  page_id: number;
+  lat: number;
+  lon: number;
+  primary: boolean;
+  kind: string | null;
+}
+
+export interface GeotagSummary {
+  entries_processed: number;
+  elapsed_ms: number;
+}
+
 /**
  * Whether we're running inside a Tauri WebView vs. a browser-only dev session.
  *

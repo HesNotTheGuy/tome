@@ -14,8 +14,9 @@
 //! Each component is held as an `Arc` so the facade is cheap to clone and
 //! safe to share across async tasks.
 
+pub mod geotag_ingest;
 pub mod link_resolver;
 pub mod tome;
 
 pub use link_resolver::StorageLinkResolver;
-pub use tome::{ArticleResponse, ArticleSource, IngestSummary, TierCounts, Tome};
+pub use tome::{ArticleResponse, ArticleSource, GeotagSummary, IngestSummary, TierCounts, Tome};

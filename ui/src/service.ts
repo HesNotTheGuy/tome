@@ -9,6 +9,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import {
   ArticleResponse,
+  Geotag,
+  GeotagSummary,
   IngestSummary,
   InstalledModule,
   ModuleSpec,
@@ -54,6 +56,12 @@ export interface TomeService {
   dumpPath(): Promise<string | null>;
   setDumpPath(path: string | null): Promise<void>;
   lastIndexPath(): Promise<string | null>;
+  ingestGeotags(
+    path: string,
+    onProgress: (count: number) => void,
+  ): Promise<GeotagSummary>;
+  countGeotags(): Promise<number>;
+  geotagForTitle(title: string): Promise<Geotag | null>;
   healthCheck(): Promise<string>;
 }
 
@@ -118,6 +126,23 @@ export const tome: TomeService = {
   },
   lastIndexPath() {
     return invoke<string | null>("last_index_path");
+  },
+  countGeotags() {
+    return invoke<number>("count_geotags");
+  },
+  geotagForTitle(title) {
+    return invoke<Geotag | null>("geotag_for_title", { title });
+  },
+  async ingestGeotags(path, onProgress) {
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>("geotag:progress", (e) => {
+      onProgress(e.payload);
+    });
+    try {
+      return await invoke<GeotagSummary>("ingest_geotags", { path });
+    } finally {
+      unlisten();
+    }
   },
   async ingestIndex(path, onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

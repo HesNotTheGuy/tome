@@ -25,14 +25,14 @@ use tome_storage::Geotag;
 
 const INSERT_PREFIX: &str = "INSERT INTO `geo_tags` VALUES ";
 
-pub fn parse_file<F: FnMut(Geotag)>(path: &Path, mut on_geotag: F) -> Result<u64> {
+pub fn parse_file<F: FnMut(Geotag)>(path: &Path, on_geotag: F) -> Result<u64> {
     let file = File::open(path)
         .map_err(|e| TomeError::Other(format!("open geotag dump {path:?}: {e}")))?;
     let mut gz = GzDecoder::new(file);
     let mut content = String::new();
     gz.read_to_string(&mut content)
         .map_err(|e| TomeError::Other(format!("decompress geotag dump: {e}")))?;
-    parse_str(&content, |g| on_geotag(g))
+    parse_str(&content, on_geotag)
 }
 
 pub fn parse_str<F: FnMut(Geotag)>(content: &str, mut on_geotag: F) -> Result<u64> {
@@ -167,7 +167,8 @@ INSERT INTO `geo_tags` VALUES \
 
     #[test]
     fn skips_invalid_coordinates() {
-        let sql = "INSERT INTO `geo_tags` VALUES (1,1,'earth',1,999.0,500.0,0,'broken',NULL,NULL,NULL);";
+        let sql =
+            "INSERT INTO `geo_tags` VALUES (1,1,'earth',1,999.0,500.0,0,'broken',NULL,NULL,NULL);";
         let mut tags = Vec::new();
         let n = parse_str(sql, |g| tags.push(g)).unwrap();
         assert_eq!(n, 0);

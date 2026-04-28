@@ -18,8 +18,8 @@ use tome_archive::{ArchiveStore, SavedRevisionMeta};
 use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
-use tome_services::{ArticleResponse, IngestSummary, TierCounts, Tome};
-use tome_storage::{ArticleStore, SqliteArticleStore};
+use tome_services::{ArticleResponse, GeotagSummary, IngestSummary, TierCounts, Tome};
+use tome_storage::{ArticleStore, Geotag, SqliteArticleStore};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,6 +52,9 @@ pub fn run() {
             user_agent,
             tier_counts,
             ingest_index,
+            ingest_geotags,
+            count_geotags,
+            geotag_for_title,
             fetch_revisions,
             import_module_from_path,
             dump_path,
@@ -258,6 +261,36 @@ fn last_index_path(state: State<'_, Arc<Tome>>) -> Option<String> {
     state
         .last_index_path()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn ingest_geotags(
+    path: String,
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<GeotagSummary, String> {
+    let path = PathBuf::from(path);
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        tome.ingest_geotags(&path, |count| {
+            let _ = app.emit("geotag:progress", count);
+        })
+    })
+    .await
+    .map_err(|e| format!("geotag ingest task join: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn count_geotags(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_geotags().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn geotag_for_title(title: String, state: State<'_, Arc<Tome>>) -> Result<Option<Geotag>, String> {
+    state
+        .geotag_for_title(&Title::new(&title))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
