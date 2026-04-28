@@ -4,7 +4,7 @@ import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
 import Settings from "./panes/Settings";
-import { ThemeToggle, useTheme } from "./components/Theme";
+import { PresetPicker, ThemeToggle, useTheme } from "./components/Theme";
 import SearchBar from "./components/SearchBar";
 
 type Pane = "library" | "reader" | "archive" | "settings";
@@ -19,19 +19,21 @@ const PANE_LABEL: Record<Pane, string> = {
 export default function App() {
   const [pane, setPane] = useState<Pane>("library");
   const [activeTitle, setActiveTitle] = useState<string | null>(null);
-  useTheme(); // attaches dark-mode class to <html>
+  useTheme(); // attaches dark-mode class + data-preset to <html>
 
-  // When the user opens an article from anywhere, jump to Reader.
   useEffect(() => {
     if (activeTitle) setPane("reader");
   }, [activeTitle]);
 
   return (
     <div className="h-full flex flex-col">
-      <header className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 bg-white/60 dark:bg-zinc-950/60 backdrop-blur">
+      <header
+        className="flex items-center justify-between border-b border-tome-border px-4 py-2 backdrop-blur"
+        style={{ backgroundColor: "color-mix(in srgb, var(--tome-surface) 60%, transparent)" }}
+      >
         <div className="flex items-center gap-3">
           <span className="font-bold text-lg tracking-tight">Tome</span>
-          <span className="text-xs text-zinc-500 dark:text-zinc-400 hidden sm:inline">
+          <span className="text-xs text-tome-muted hidden sm:inline">
             offline Wikipedia
           </span>
         </div>
@@ -44,16 +46,17 @@ export default function App() {
               className={
                 "px-3 py-1 rounded text-sm transition-colors " +
                 (pane === p
-                  ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                  : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900")
+                  ? "bg-tome-surface-2 text-tome-text"
+                  : "text-tome-muted hover:bg-tome-surface-2")
               }
             >
               {PANE_LABEL[p]}
             </button>
           ))}
         </nav>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <SearchBar onOpenArticle={(title) => setActiveTitle(title)} />
+          <PresetPicker />
           <ThemeToggle />
         </div>
       </header>
@@ -61,10 +64,7 @@ export default function App() {
       <main className="flex-1 overflow-auto">
         {pane === "library" && <Library onOpen={(t) => setActiveTitle(t)} />}
         {pane === "reader" && (
-          <Reader
-            title={activeTitle}
-            onNavigate={(t) => setActiveTitle(t)}
-          />
+          <Reader title={activeTitle} onNavigate={(t) => setActiveTitle(t)} />
         )}
         {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
         {pane === "settings" && <Settings />}
@@ -77,7 +77,10 @@ export default function App() {
 
 function StatusBar() {
   return (
-    <footer className="border-t border-zinc-200 dark:border-zinc-800 px-4 py-1 text-xs text-zinc-500 dark:text-zinc-400 flex items-center justify-between bg-white/60 dark:bg-zinc-950/60">
+    <footer
+      className="border-t border-tome-border px-4 py-1 text-xs text-tome-muted flex items-center justify-between"
+      style={{ backgroundColor: "color-mix(in srgb, var(--tome-surface) 60%, transparent)" }}
+    >
       <span>v0.1.0</span>
       <span>under construction</span>
     </footer>

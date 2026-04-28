@@ -2,6 +2,100 @@
 @tailwind components;
 @tailwind utilities;
 
+/* -------------------------------------------------------------------------
+ * Theme presets.
+ *
+ * Two dimensions: `theme` (light / dark / system) and `preset` (library /
+ * codex / …). Light/dark is handled by Tailwind's `darkMode: "class"`,
+ * preset is selected via a `data-preset` attribute on <html>.
+ *
+ * All visible color, surface, and font choices live as CSS custom
+ * properties so a preset switch is one attribute write.
+ * ----------------------------------------------------------------------- */
+
+:root,
+[data-preset="library"] {
+  /* Library light (default) */
+  --tome-bg: theme("colors.zinc.50");
+  --tome-surface: #ffffff;
+  --tome-surface-2: theme("colors.zinc.100");
+  --tome-text: theme("colors.zinc.900");
+  --tome-text-muted: theme("colors.zinc.500");
+  --tome-border: theme("colors.zinc.200");
+  --tome-border-strong: theme("colors.zinc.300");
+  --tome-accent: theme("colors.blue.600");
+  --tome-link: theme("colors.blue.600");
+  --tome-link-missing: theme("colors.zinc.400");
+  --tome-link-external: theme("colors.emerald.700");
+  --tome-danger: theme("colors.red.600");
+  --tome-success: theme("colors.emerald.600");
+  --tome-font-body:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tome-font-display: var(--tome-font-body);
+  --tome-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.dark,
+.dark[data-preset="library"] {
+  --tome-bg: theme("colors.zinc.950");
+  --tome-surface: theme("colors.zinc.900");
+  --tome-surface-2: theme("colors.zinc.800");
+  --tome-text: theme("colors.zinc.100");
+  --tome-text-muted: theme("colors.zinc.400");
+  --tome-border: theme("colors.zinc.800");
+  --tome-border-strong: theme("colors.zinc.700");
+  --tome-accent: theme("colors.blue.500");
+  --tome-link: theme("colors.blue.400");
+  --tome-link-missing: theme("colors.zinc.500");
+  --tome-link-external: theme("colors.emerald.400");
+  --tome-danger: theme("colors.red.400");
+  --tome-success: theme("colors.emerald.400");
+}
+
+/* -------------------------------------------------------------------------
+ * Codex — humanities, classical-era, antique-book.
+ * Cream parchment / deep umber / oxblood accent. Serif-forward. Same
+ * underlying layout, very different feel.
+ * ----------------------------------------------------------------------- */
+
+[data-preset="codex"] {
+  --tome-bg: #f5efe0;
+  --tome-surface: #faf5e7;
+  --tome-surface-2: #efe6ce;
+  --tome-text: #2a1f10;
+  --tome-text-muted: #6b5a3f;
+  --tome-border: #d8c69a;
+  --tome-border-strong: #b29b6c;
+  --tome-accent: #8a1818;
+  --tome-link: #8a1818;
+  --tome-link-missing: #b09b6f;
+  --tome-link-external: #2d5e3a;
+  --tome-danger: #8a1818;
+  --tome-success: #3d6e3d;
+  --tome-font-body:
+    "Crimson Pro", Georgia, "Times New Roman", Cambria, serif;
+  --tome-font-display: var(--tome-font-body);
+}
+
+.dark[data-preset="codex"] {
+  --tome-bg: #1a140e;
+  --tome-surface: #221b13;
+  --tome-surface-2: #2c2418;
+  --tome-text: #ede4d3;
+  --tome-text-muted: #8d7a5a;
+  --tome-border: #4a3d28;
+  --tome-border-strong: #6b5839;
+  --tome-accent: #d99350;
+  --tome-link: #e0a366;
+  --tome-link-missing: #6b5839;
+  --tome-link-external: #87b58a;
+}
+
+/* -------------------------------------------------------------------------
+ * Base styles wired to the variables.
+ * ----------------------------------------------------------------------- */
+
 @layer base {
   html,
   body,
@@ -10,26 +104,38 @@
   }
 
   body {
-    @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+    background-color: var(--tome-bg);
+    color: var(--tome-text);
+    font-family: var(--tome-font-body);
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Article rendering surface. Output of `tome-wikitext::Renderer`.
+ * ----------------------------------------------------------------------- */
+
 @layer components {
   .tome-article {
     @apply max-w-3xl mx-auto px-4 py-6 leading-relaxed;
+    color: var(--tome-text);
+    font-family: var(--tome-font-body);
   }
   .tome-article p {
     @apply my-3;
   }
   .tome-article h2 {
-    @apply text-2xl font-bold mt-8 mb-3 border-b border-zinc-200 dark:border-zinc-800 pb-1;
+    @apply text-2xl font-bold mt-8 mb-3 pb-1;
+    border-bottom: 1px solid var(--tome-border);
+    font-family: var(--tome-font-display);
   }
   .tome-article h3 {
     @apply text-xl font-semibold mt-6 mb-2;
+    font-family: var(--tome-font-display);
   }
   .tome-article h4 {
     @apply text-lg font-semibold mt-4 mb-2;
+    font-family: var(--tome-font-display);
   }
   .tome-article ul,
   .tome-article ol {
@@ -42,35 +148,50 @@
     @apply list-decimal;
   }
   .tome-article a.tome-wikilink {
-    @apply text-blue-600 dark:text-blue-400 hover:underline;
+    color: var(--tome-link);
+  }
+  .tome-article a.tome-wikilink:hover {
+    text-decoration: underline;
   }
   .tome-article a.tome-missing {
-    @apply text-zinc-400 dark:text-zinc-500 italic decoration-dotted underline;
+    color: var(--tome-link-missing);
+    text-decoration: underline dotted;
+    font-style: italic;
   }
   .tome-article a.tome-extlink {
-    @apply text-emerald-700 dark:text-emerald-400 hover:underline;
+    color: var(--tome-link-external);
+  }
+  .tome-article a.tome-extlink:hover {
+    text-decoration: underline;
   }
   .tome-template-placeholder,
   .tome-image-placeholder {
-    @apply inline-block px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-xs text-zinc-500 dark:text-zinc-400;
+    background-color: var(--tome-surface-2);
+    color: var(--tome-text-muted);
+    @apply inline-block px-2 py-0.5 rounded text-xs;
   }
   .tome-ref {
-    @apply text-blue-600 dark:text-blue-400;
+    color: var(--tome-link);
   }
   .tome-references {
-    @apply mt-10 pt-4 border-t border-zinc-200 dark:border-zinc-800 text-sm;
+    @apply mt-10 pt-4 text-sm;
+    border-top: 1px solid var(--tome-border);
   }
   .tome-render-error {
-    @apply text-red-600 dark:text-red-400 font-mono p-3 bg-red-50 dark:bg-red-950 rounded mb-2;
+    @apply font-mono p-3 rounded mb-2;
+    background-color: var(--tome-surface-2);
+    color: var(--tome-danger);
   }
   .tome-table {
     @apply my-4 border-collapse;
   }
   .tome-table th,
   .tome-table td {
-    @apply border border-zinc-300 dark:border-zinc-700 px-2 py-1;
+    border: 1px solid var(--tome-border);
+    @apply px-2 py-1;
   }
   .tome-table th {
-    @apply bg-zinc-100 dark:bg-zinc-900 font-semibold;
+    background-color: var(--tome-surface-2);
+    @apply font-semibold;
   }
 }
