@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { IS_TAURI, TierCounts } from "../types";
+import { IngestSummary, IS_TAURI, TierCounts } from "../types";
 
 interface SettingsState {
   killSwitch: boolean;
@@ -132,6 +132,9 @@ export default function Settings() {
         </Row>
       </Section>
 
+      <IngestSection onComplete={refresh} />
+
+
       <Section title="AI features (experimental)">
         <Row label="Master switch">
           <DisabledToggle label="off" />
@@ -163,6 +166,93 @@ function DisabledToggle({ label }: { label: string }) {
     >
       {label}
     </button>
+  );
+}
+
+function IngestSection({ onComplete }: { onComplete: () => void }) {
+  const [path, setPath] = useState("");
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
+    "idle",
+  );
+  const [count, setCount] = useState(0);
+  const [summary, setSummary] = useState<IngestSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleIngest() {
+    if (!IS_TAURI) {
+      setError("ingestion requires the Tauri shell");
+      setPhase("error");
+      return;
+    }
+    if (!path.trim()) {
+      setError("paste the path to the multistream index file");
+      setPhase("error");
+      return;
+    }
+    setPhase("running");
+    setCount(0);
+    setError(null);
+    setSummary(null);
+    try {
+      const result = await tome.ingestIndex(path.trim(), (n) => setCount(n));
+      setSummary(result);
+      setPhase("done");
+      onComplete();
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">
+        Dump ingestion
+      </h3>
+      <div className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Point Tome at a downloaded{" "}
+          <code className="text-[11px] px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded">
+            *-multistream-index.txt.bz2
+          </code>{" "}
+          file. Tome streams the index and records each article&apos;s offset
+          as Cold-tier metadata. The dump itself is read on-demand later.
+        </p>
+
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={phase === "running"}
+          placeholder="/path/to/enwiki-YYYYMMDD-pages-articles-multistream-index.txt.bz2"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 disabled:opacity-50"
+        />
+
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleIngest}
+            disabled={phase === "running" || !IS_TAURI}
+            className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed"
+          >
+            {phase === "running"
+              ? `Ingesting… ${count.toLocaleString()} entries`
+              : "Begin ingest"}
+          </button>
+          {phase === "done" && summary && (
+            <span className="text-xs text-emerald-700 dark:text-emerald-400">
+              ✓ {summary.entries_processed.toLocaleString()} entries in{" "}
+              {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-red-600 dark:text-red-400">
+              {error}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

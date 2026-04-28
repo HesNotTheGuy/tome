@@ -7,6 +7,7 @@
 
 import {
   ArticleResponse,
+  IngestSummary,
   InstalledModule,
   IS_TAURI,
   ModuleSpec,
@@ -51,6 +52,10 @@ export interface TomeService {
   breakerOpen(): Promise<boolean>;
   userAgent(): Promise<string>;
   tierCounts(): Promise<TierCounts>;
+  ingestIndex(
+    path: string,
+    onProgress: (count: number) => void,
+  ): Promise<IngestSummary>;
   healthCheck(): Promise<string>;
 }
 
@@ -100,6 +105,20 @@ export const tome: TomeService = {
   },
   tierCounts() {
     return invoke<TierCounts>("tier_counts");
+  },
+  async ingestIndex(path, onProgress) {
+    if (!IS_TAURI) {
+      throw new Error("ingest requires the Tauri shell");
+    }
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>("ingest:progress", (e) => {
+      onProgress(e.payload);
+    });
+    try {
+      return await invoke<IngestSummary>("ingest_index", { path });
+    } finally {
+      unlisten();
+    }
   },
   healthCheck() {
     return invoke<string>("health_check");

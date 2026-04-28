@@ -10,14 +10,16 @@
 
 use std::sync::Arc;
 
-use tauri::{Manager, State};
+use std::path::PathBuf;
+
+use tauri::{AppHandle, Emitter, Manager, State};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport};
 use tome_archive::{ArchiveStore, SavedRevisionMeta};
-use tome_core::{Tier, Title};
+use tome_core::{SearchHit, Tier, Title};
 use tome_dump::DumpReader;
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
-use tome_search::{Index as SearchIndex, SearchHit};
-use tome_services::{ArticleResponse, TierCounts, Tome};
+use tome_search::Index as SearchIndex;
+use tome_services::{ArticleResponse, IngestSummary, TierCounts, Tome};
 use tome_storage::{ArticleStore, SqliteArticleStore};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -50,6 +52,7 @@ pub fn run() {
             breaker_open,
             user_agent,
             tier_counts,
+            ingest_index,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -194,6 +197,27 @@ fn user_agent(state: State<'_, Arc<Tome>>) -> String {
 #[tauri::command]
 fn tier_counts(state: State<'_, Arc<Tome>>) -> Result<TierCounts, String> {
     state.tier_counts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ingest_index(
+    path: String,
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<IngestSummary, String> {
+    let path = PathBuf::from(path);
+    let tome = state.inner().clone();
+    // The ingest is sync (SQLite + bz2 stream), but we want to keep the
+    // async runtime responsive. spawn_blocking moves it off the runtime
+    // thread and gives us a JoinHandle we can await.
+    tokio::task::spawn_blocking(move || {
+        tome.ingest_index(&path, |count| {
+            let _ = app.emit("ingest:progress", count);
+        })
+    })
+    .await
+    .map_err(|e| format!("ingest task join: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

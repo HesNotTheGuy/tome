@@ -17,6 +17,11 @@ use crate::{compression, schema};
 /// trait so they can be tested with stand-ins.
 pub trait ArticleStore: Send + Sync {
     fn upsert_metadata(&self, m: &ArticleMetadata) -> Result<()>;
+    /// Bulk insert/update Cold-tier metadata in a single transaction. Used by
+    /// dump ingestion where we need 6M+ rows in under a minute. Returns the
+    /// number of rows processed. Per-row writes through `upsert_metadata` are
+    /// 100x slower because of per-call lock + transaction overhead.
+    fn batch_upsert_cold(&self, entries: &[(u64, String, u64)]) -> Result<u64>;
     fn lookup(&self, title: &Title) -> Result<Option<ArticleRecord>>;
     fn get_content(&self, page_id: u64) -> Result<Option<ArticleContent>>;
     /// Move an article to a new tier.
@@ -115,6 +120,45 @@ impl ArticleStore for SqliteArticleStore {
         )
         .map_err(|e| TomeError::Storage(format!("upsert metadata: {e}")))?;
         Ok(())
+    }
+
+    fn batch_upsert_cold(&self, entries: &[(u64, String, u64)]) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock()?;
+        let now_ts = now_secs();
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin batch tx: {e}")))?;
+        let mut count = 0_u64;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO articles
+                        (page_id, title, tier, pinned, stream_offset, stream_length,
+                         revision_id, last_accessed, access_count, created_at, updated_at)
+                     VALUES (?1, ?2, 'cold', 0, ?3, NULL, NULL, 0, 0, ?4, ?4)
+                     ON CONFLICT(page_id) DO UPDATE SET
+                        title         = excluded.title,
+                        stream_offset = excluded.stream_offset,
+                        updated_at    = excluded.updated_at",
+                )
+                .map_err(|e| TomeError::Storage(format!("prepare batch: {e}")))?;
+            for (page_id, title, stream_offset) in entries {
+                stmt.execute(params![
+                    *page_id as i64,
+                    title,
+                    *stream_offset as i64,
+                    now_ts
+                ])
+                .map_err(|e| TomeError::Storage(format!("batch upsert: {e}")))?;
+                count += 1;
+            }
+        }
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit batch: {e}")))?;
+        Ok(count)
     }
 
     fn lookup(&self, title: &Title) -> Result<Option<ArticleRecord>> {
@@ -553,6 +597,46 @@ mod tests {
         // Page 1 has access_count=0; should appear first.
         let candidates = store.lru_candidates(3).unwrap();
         assert_eq!(candidates[0], 1, "least-accessed should be first");
+    }
+
+    #[test]
+    fn batch_upsert_cold_inserts_many_rows_in_one_tx() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let entries: Vec<(u64, String, u64)> = (1..=1000)
+            .map(|i| (i, format!("Article{i}"), i * 100))
+            .collect();
+        let n = store.batch_upsert_cold(&entries).unwrap();
+        assert_eq!(n, 1000);
+        assert_eq!(store.count_by_tier(Tier::Cold).unwrap(), 1000);
+        let rec = store
+            .lookup(&Title::new("Article500"))
+            .unwrap()
+            .expect("found");
+        assert_eq!(rec.metadata.page_id, 500);
+        assert_eq!(rec.metadata.stream_offset, Some(50_000));
+        assert_eq!(rec.metadata.tier, Tier::Cold);
+    }
+
+    #[test]
+    fn batch_upsert_cold_updates_existing_rows() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .batch_upsert_cold(&[(1, "Photon".into(), 100)])
+            .unwrap();
+        // Re-ingest with a different offset (e.g. new dump).
+        store
+            .batch_upsert_cold(&[(1, "Photon".into(), 999)])
+            .unwrap();
+        let rec = store.lookup(&Title::new("Photon")).unwrap().unwrap();
+        assert_eq!(rec.metadata.stream_offset, Some(999));
+        assert_eq!(store.count_by_tier(Tier::Cold).unwrap(), 1);
+    }
+
+    #[test]
+    fn batch_upsert_cold_empty_input_no_op() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let n = store.batch_upsert_cold(&[]).unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]

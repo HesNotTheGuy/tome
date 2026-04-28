@@ -1,18 +1,23 @@
 //! The `Tome` facade — the only public surface the UI depends on.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tome_api::MediaWikiClient;
 use tome_archive::ArchiveStore;
-use tome_core::{Result, Tier, Title, TomeError};
-use tome_dump::{DumpReader, parse_pages};
+use tome_core::{Result, SearchHit, Tier, Title, TomeError};
+use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
-use tome_search::{Index as SearchIndex, SearchHit};
+use tome_search::Index as SearchIndex;
 use tome_storage::{ArticleContent, ArticleStore};
 use tome_wikitext::Renderer;
 
 use crate::link_resolver::StorageLinkResolver;
+
+const INGEST_BATCH_SIZE: usize = 5_000;
+const INGEST_PROGRESS_INTERVAL: u64 = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ArticleSource {
@@ -265,6 +270,57 @@ impl Tome {
             evicted: self.storage.count_by_tier(Tier::Evicted)?,
         })
     }
+
+    /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)
+    /// and upsert every entry as Cold-tier metadata. The full index is
+    /// ~6.5M lines for English Wikipedia; this typically completes in 30-90s
+    /// on an SSD.
+    ///
+    /// `on_progress` is called every ~10K entries with the running count, so
+    /// the UI can show a live counter without an event channel.
+    pub fn ingest_index<F>(&self, index_path: &Path, mut on_progress: F) -> Result<IngestSummary>
+    where
+        F: FnMut(u64),
+    {
+        let started = Instant::now();
+        let file = std::fs::File::open(index_path)
+            .map_err(|e| TomeError::Dump(format!("open index {index_path:?}: {e}")))?;
+        let reader = IndexReader::new(file);
+
+        let mut batch: Vec<(u64, String, u64)> = Vec::with_capacity(INGEST_BATCH_SIZE);
+        let mut total: u64 = 0;
+        let mut next_progress = INGEST_PROGRESS_INTERVAL;
+
+        for entry in reader {
+            let entry = entry?;
+            batch.push((entry.page_id, entry.title, entry.stream_offset));
+            if batch.len() >= INGEST_BATCH_SIZE {
+                let n = self.storage.batch_upsert_cold(&batch)?;
+                total += n;
+                batch.clear();
+                if total >= next_progress {
+                    on_progress(total);
+                    next_progress = total + INGEST_PROGRESS_INTERVAL;
+                }
+            }
+        }
+        if !batch.is_empty() {
+            let n = self.storage.batch_upsert_cold(&batch)?;
+            total += n;
+        }
+        on_progress(total);
+
+        Ok(IngestSummary {
+            entries_processed: total,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestSummary {
+    pub entries_processed: u64,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

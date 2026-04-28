@@ -65,5 +65,10 @@ export interface TierCounts {
   evicted: number;
 }
 
+export interface IngestSummary {
+  entries_processed: number;
+  elapsed_ms: number;
+}
+
 /** Whether we're running inside a Tauri WebView vs. a browser-only dev session. */
 export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
