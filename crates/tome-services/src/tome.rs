@@ -14,6 +14,7 @@ use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_storage::{
     ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, Geotag,
+    RelatedArticle,
 };
 use tome_wikitext::Renderer;
 
@@ -544,6 +545,27 @@ impl Tome {
 
     pub fn count_categorylinks(&self) -> Result<u64> {
         self.storage.count_categorylinks()
+    }
+
+    /// Articles related to the given title via shared categorylinks. Empty
+    /// vec if recommendations are disabled in settings, the article isn't
+    /// in our store, or no categorylinks have been ingested.
+    pub fn related_to_title(&self, title: &Title, limit: u32) -> Result<Vec<RelatedArticle>> {
+        if !self.settings().recommendations_enabled {
+            return Ok(Vec::new());
+        }
+        let Some(rec) = self.storage.lookup(title)? else {
+            return Ok(Vec::new());
+        };
+        self.storage.related_to(rec.metadata.page_id, limit)
+    }
+
+    pub fn recommendations_enabled(&self) -> bool {
+        self.settings().recommendations_enabled
+    }
+
+    pub fn set_recommendations_enabled(&self, enabled: bool) -> Result<()> {
+        self.save_settings(|s| s.recommendations_enabled = enabled)
     }
 }
 

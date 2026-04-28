@@ -70,6 +70,20 @@ pub trait ArticleStore: Send + Sync {
     /// by the Browse pane's search input.
     fn search_categories(&self, prefix: &str, limit: u32) -> Result<Vec<String>>;
     fn count_categorylinks(&self) -> Result<u64>;
+
+    /// Articles related to `page_id` by shared category membership. Returns
+    /// up to `limit` rows ordered by descending shared-category count.
+    /// Excludes the source article itself. Powers the Reader's "Related
+    /// articles" section.
+    fn related_to(&self, page_id: u64, limit: u32) -> Result<Vec<RelatedArticle>>;
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RelatedArticle {
+    pub page_id: u64,
+    pub title: String,
+    /// Number of categories this article shares with the source.
+    pub shared_categories: u32,
 }
 
 pub struct SqliteArticleStore {
@@ -625,6 +639,43 @@ impl ArticleStore for SqliteArticleStore {
             .query_row("SELECT COUNT(*) FROM categorylinks", [], |row| row.get(0))
             .map_err(|e| TomeError::Storage(format!("count categorylinks: {e}")))?;
         Ok(n as u64)
+    }
+
+    fn related_to(&self, page_id: u64, limit: u32) -> Result<Vec<RelatedArticle>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "WITH src_cats AS (
+                     SELECT cl_to FROM categorylinks
+                     WHERE cl_from = ?1 AND cl_type = 'page'
+                 )
+                 SELECT a.page_id, a.title, COUNT(*) AS shared
+                 FROM categorylinks cl
+                 JOIN src_cats sc ON cl.cl_to = sc.cl_to
+                 JOIN articles a ON a.page_id = cl.cl_from
+                 WHERE cl.cl_from != ?1 AND cl.cl_type = 'page'
+                 GROUP BY a.page_id, a.title
+                 ORDER BY shared DESC, a.title
+                 LIMIT ?2",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare related_to: {e}")))?;
+        let rows = stmt
+            .query_map(params![page_id as i64, limit as i64], |row| {
+                let pid: i64 = row.get(0)?;
+                let title: String = row.get(1)?;
+                let shared: i64 = row.get(2)?;
+                Ok(RelatedArticle {
+                    page_id: pid as u64,
+                    title,
+                    shared_categories: shared as u32,
+                })
+            })
+            .map_err(|e| TomeError::Storage(format!("query related_to: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row: {e}")))?);
+        }
+        Ok(out)
     }
 
     fn lru_candidates(&self, n: u32) -> Result<Vec<u64>> {

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { ArticleResponse, Geotag, isTauri, Revision } from "../types";
+import {
+  ArticleResponse,
+  Geotag,
+  isTauri,
+  RelatedArticle,
+  Revision,
+} from "../types";
 import Timeline from "../components/Timeline";
 
 interface ReaderProps {
@@ -16,6 +22,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
   const [revLoading, setRevLoading] = useState(false);
   const [revError, setRevError] = useState<string | null>(null);
   const [geotag, setGeotag] = useState<Geotag | null>(null);
+  const [related, setRelated] = useState<RelatedArticle[]>([]);
 
   // Look up the geotag for the current article (if any) when the title
   // changes. Silent failures — if we have no geotags ingested or the
@@ -33,6 +40,27 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       })
       .catch(() => {
         if (!canceled) setGeotag(null);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [title]);
+
+  // Recommendations: silently empty when disabled in settings or when no
+  // categorylinks have been ingested.
+  useEffect(() => {
+    if (!title || !isTauri()) {
+      setRelated([]);
+      return;
+    }
+    let canceled = false;
+    tome
+      .relatedToTitle(title, 8)
+      .then((r) => {
+        if (!canceled) setRelated(r);
+      })
+      .catch(() => {
+        if (!canceled) setRelated([]);
       });
     return () => {
       canceled = true;
@@ -207,13 +235,48 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       )}
 
       {response && !loading && !error && (
-        <article
-          className="tome-article"
-          // Renderer output is escaped server-side; we trust our own backend.
-          dangerouslySetInnerHTML={{ __html: response.html }}
-        />
+        <>
+          <article
+            className="tome-article"
+            // Renderer output is escaped server-side; we trust our own backend.
+            dangerouslySetInnerHTML={{ __html: response.html }}
+          />
+          {related.length > 0 && (
+            <RelatedSection items={related} onOpen={onNavigate} />
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+function RelatedSection({
+  items,
+  onOpen,
+}: {
+  items: RelatedArticle[];
+  onOpen: (title: string) => void;
+}) {
+  return (
+    <section className="max-w-3xl mx-auto px-4 py-6 border-t border-tome-border">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-3">
+        Related articles
+      </h2>
+      <ul className="grid gap-2 grid-cols-1 sm:grid-cols-2">
+        {items.map((r) => (
+          <li
+            key={r.page_id}
+            onClick={() => onOpen(r.title)}
+            className="p-3 rounded border border-tome-border hover:bg-tome-surface-2 cursor-pointer flex items-center justify-between gap-3"
+          >
+            <span className="text-sm">{r.title}</span>
+            <span className="text-[10px] text-tome-muted">
+              {r.shared_categories} shared
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

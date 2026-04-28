@@ -61,7 +61,7 @@ impl Config {
 ///
 /// All fields are `Option` so a fresh install starts blank and the UI can
 /// surface "not configured yet" states clearly.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     /// Absolute path to the multistream bz2 dump file. Required for Cold-tier
     /// reads.
@@ -71,6 +71,24 @@ pub struct Settings {
     /// a UI convenience (pre-fills the ingest input).
     #[serde(default)]
     pub last_index_path: Option<PathBuf>,
+    /// Whether the Reader surfaces a "Related articles" section based on
+    /// shared categorylinks. Default on; toggleable in Settings.
+    #[serde(default = "default_true")]
+    pub recommendations_enabled: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            dump_path: None,
+            last_index_path: None,
+            recommendations_enabled: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Settings {
@@ -123,6 +141,7 @@ mod tests {
         let s = Settings {
             dump_path: Some(PathBuf::from("/some/dump.bz2")),
             last_index_path: Some(PathBuf::from("/some/index.bz2")),
+            recommendations_enabled: false,
         };
         s.save(dir.path()).unwrap();
         let loaded = Settings::load(dir.path());

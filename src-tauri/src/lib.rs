@@ -21,7 +21,9 @@ use tome_search::Index as SearchIndex;
 use tome_services::{
     ArticleResponse, CategoryIngestSummary, GeotagSummary, IngestSummary, TierCounts, Tome,
 };
-use tome_storage::{ArticleStore, CategoryMember, CategoryMemberKind, Geotag, SqliteArticleStore};
+use tome_storage::{
+    ArticleStore, CategoryMember, CategoryMemberKind, Geotag, RelatedArticle, SqliteArticleStore,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -62,6 +64,9 @@ pub fn run() {
             categories_for_title,
             search_categories,
             count_categorylinks,
+            related_to_title,
+            recommendations_enabled,
+            set_recommendations_enabled,
             fetch_revisions,
             import_module_from_path,
             dump_path,
@@ -352,6 +357,29 @@ fn search_categories(
 #[tauri::command]
 fn count_categorylinks(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
     state.count_categorylinks().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn related_to_title(
+    title: String,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<RelatedArticle>, String> {
+    state
+        .related_to_title(&Title::new(&title), limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn recommendations_enabled(state: State<'_, Arc<Tome>>) -> bool {
+    state.recommendations_enabled()
+}
+
+#[tauri::command]
+fn set_recommendations_enabled(enabled: bool, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state
+        .set_recommendations_enabled(enabled)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

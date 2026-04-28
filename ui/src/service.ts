@@ -17,6 +17,7 @@ import {
   IngestSummary,
   InstalledModule,
   ModuleSpec,
+  RelatedArticle,
   Revision,
   SavedRevisionMeta,
   SearchHit,
@@ -77,6 +78,9 @@ export interface TomeService {
   categoriesForTitle(title: string): Promise<string[]>;
   searchCategories(prefix: string, limit: number): Promise<string[]>;
   countCategorylinks(): Promise<number>;
+  relatedToTitle(title: string, limit: number): Promise<RelatedArticle[]>;
+  recommendationsEnabled(): Promise<boolean>;
+  setRecommendationsEnabled(enabled: boolean): Promise<void>;
   healthCheck(): Promise<string>;
 }
 
@@ -186,6 +190,15 @@ export const tome: TomeService = {
   },
   countCategorylinks() {
     return invoke<number>("count_categorylinks");
+  },
+  relatedToTitle(title, limit) {
+    return invoke<RelatedArticle[]>("related_to_title", { title, limit });
+  },
+  recommendationsEnabled() {
+    return invoke<boolean>("recommendations_enabled");
+  },
+  setRecommendationsEnabled(enabled) {
+    return invoke<void>("set_recommendations_enabled", { enabled });
   },
   async ingestIndex(path, onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

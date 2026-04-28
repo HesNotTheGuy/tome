@@ -106,6 +106,12 @@ export interface CategoryIngestSummary {
   elapsed_ms: number;
 }
 
+export interface RelatedArticle {
+  page_id: number;
+  title: string;
+  shared_categories: number;
+}
+
 /**
  * Whether we're running inside a Tauri WebView vs. a browser-only dev session.
  *

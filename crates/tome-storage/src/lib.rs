@@ -23,4 +23,4 @@ pub mod store;
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
-pub use store::{ArticleStore, SqliteArticleStore};
+pub use store::{ArticleStore, RelatedArticle, SqliteArticleStore};

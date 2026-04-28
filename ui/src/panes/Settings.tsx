@@ -13,6 +13,7 @@ interface SettingsState {
   breakerOpen: boolean;
   userAgent: string;
   tierCounts: TierCounts;
+  recommendationsEnabled: boolean;
 }
 
 const EMPTY: SettingsState = {
@@ -20,6 +21,7 @@ const EMPTY: SettingsState = {
   breakerOpen: false,
   userAgent: "Tome/1.0 (+https://github.com/HesNotTheGuy/tome)",
   tierCounts: { hot: 0, warm: 0, cold: 0, evicted: 0 },
+  recommendationsEnabled: true,
 };
 
 export default function Settings() {
@@ -29,13 +31,26 @@ export default function Settings() {
   async function refresh() {
     if (!isTauri()) return;
     try {
-      const [killSwitch, breakerOpen, userAgent, tierCounts] = await Promise.all([
+      const [
+        killSwitch,
+        breakerOpen,
+        userAgent,
+        tierCounts,
+        recommendationsEnabled,
+      ] = await Promise.all([
         tome.killSwitchEngaged(),
         tome.breakerOpen(),
         tome.userAgent(),
         tome.tierCounts(),
+        tome.recommendationsEnabled(),
       ]);
-      setState({ killSwitch, breakerOpen, userAgent, tierCounts });
+      setState({
+        killSwitch,
+        breakerOpen,
+        userAgent,
+        tierCounts,
+        recommendationsEnabled,
+      });
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -55,6 +70,17 @@ export default function Settings() {
     try {
       await tome.setKillSwitch(next);
       setState((s) => ({ ...s, killSwitch: next }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function toggleRecommendations() {
+    if (!isTauri()) return;
+    const next = !state.recommendationsEnabled;
+    try {
+      await tome.setRecommendationsEnabled(next);
+      setState((s) => ({ ...s, recommendationsEnabled: next }));
     } catch (e) {
       setError(String(e));
     }
@@ -145,6 +171,29 @@ export default function Settings() {
       <GeotagSection />
 
       <CategorylinksSection />
+
+      <Section title="Reader behavior">
+        <Row label="Show related articles">
+          <button
+            type="button"
+            onClick={toggleRecommendations}
+            disabled={!isTauri()}
+            className={
+              "px-3 py-1 text-sm rounded transition-colors " +
+              (state.recommendationsEnabled
+                ? "bg-tome-surface-2 text-tome-text hover:bg-tome-border"
+                : "bg-tome-bg text-tome-muted border border-tome-border hover:bg-tome-surface-2")
+            }
+          >
+            {state.recommendationsEnabled ? "on" : "off"}
+          </button>
+        </Row>
+        <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+          When on, the Reader shows up to 8 articles that share the most
+          categories with what you&apos;re reading. Requires categorylinks to
+          be ingested. Off saves an SQL lookup per article.
+        </div>
+      </Section>
 
       <Section title="AI features (experimental)">
         <Row label="Master switch">
