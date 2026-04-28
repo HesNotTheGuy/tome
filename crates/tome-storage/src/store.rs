@@ -38,6 +38,15 @@ pub trait ArticleStore: Send + Sync {
     /// Up to `n` non-pinned Hot/Warm article ids ordered by least-recently
     /// accessed first. Used by the demotion policy in higher layers.
     fn lru_candidates(&self, n: u32) -> Result<Vec<u64>>;
+
+    // --- Geotags ---
+
+    /// Bulk insert/update geotag rows in a single transaction. Returns rows
+    /// processed.
+    fn batch_upsert_geotags(&self, entries: &[crate::geotag::Geotag]) -> Result<u64>;
+    /// Primary geotag for an article, if any.
+    fn geotag_for(&self, page_id: u64) -> Result<Option<crate::geotag::Geotag>>;
+    fn count_geotags(&self) -> Result<u64>;
 }
 
 pub struct SqliteArticleStore {
@@ -386,6 +395,72 @@ impl ArticleStore for SqliteArticleStore {
                 |row| row.get(0),
             )
             .map_err(|e| TomeError::Storage(format!("count tier: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn batch_upsert_geotags(&self, entries: &[crate::geotag::Geotag]) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin geotag tx: {e}")))?;
+        let mut count = 0_u64;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO geotags (page_id, lat, lon, primary_, kind)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(page_id, lat, lon) DO UPDATE SET
+                        primary_ = excluded.primary_,
+                        kind     = excluded.kind",
+                )
+                .map_err(|e| TomeError::Storage(format!("prepare geotag: {e}")))?;
+            for g in entries {
+                stmt.execute(params![
+                    g.page_id as i64,
+                    g.lat,
+                    g.lon,
+                    g.primary as i32,
+                    g.kind.as_deref()
+                ])
+                .map_err(|e| TomeError::Storage(format!("upsert geotag: {e}")))?;
+                count += 1;
+            }
+        }
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit geotag: {e}")))?;
+        Ok(count)
+    }
+
+    fn geotag_for(&self, page_id: u64) -> Result<Option<crate::geotag::Geotag>> {
+        let conn = self.lock()?;
+        // Prefer primary; fall back to any.
+        conn.query_row(
+            "SELECT page_id, lat, lon, primary_, kind FROM geotags
+             WHERE page_id = ?1
+             ORDER BY primary_ DESC LIMIT 1",
+            params![page_id as i64],
+            |row| {
+                Ok(crate::geotag::Geotag {
+                    page_id: row.get::<_, i64>(0)? as u64,
+                    lat: row.get(1)?,
+                    lon: row.get(2)?,
+                    primary: row.get::<_, i32>(3)? != 0,
+                    kind: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| TomeError::Storage(format!("geotag_for: {e}")))
+    }
+
+    fn count_geotags(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM geotags", [], |row| row.get(0))
+            .map_err(|e| TomeError::Storage(format!("count geotags: {e}")))?;
         Ok(n as u64)
     }
 

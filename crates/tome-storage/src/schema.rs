@@ -32,6 +32,19 @@ CREATE TABLE IF NOT EXISTS warm_content (
 );
 "#;
 
+const MIGRATION_2: &str = r#"
+CREATE TABLE IF NOT EXISTS geotags (
+    page_id  INTEGER NOT NULL,
+    lat      REAL    NOT NULL,
+    lon      REAL    NOT NULL,
+    primary_ INTEGER NOT NULL DEFAULT 0,
+    kind     TEXT,
+    PRIMARY KEY (page_id, lat, lon)
+);
+
+CREATE INDEX IF NOT EXISTS idx_geotags_page ON geotags(page_id);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -53,6 +66,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 1: {e}")))?;
     }
 
+    if from < 2 {
+        conn.execute_batch(MIGRATION_2)
+            .map_err(|e| TomeError::Storage(format!("apply migration 2: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![2_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 2: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -62,8 +85,13 @@ mod tests {
 
     use super::*;
 
+    /// The highest migration version this codebase ships. Bump this in lockstep
+    /// with new MIGRATION_N constants; the assertion below will catch
+    /// mismatches.
+    const CURRENT_VERSION: i32 = 2;
+
     #[test]
-    fn fresh_db_reaches_version_1() {
+    fn fresh_db_reaches_current_version() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i32 = conn
@@ -71,19 +99,36 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, CURRENT_VERSION);
     }
 
     #[test]
     fn migrate_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap();
-        let count: i64 = conn
+        let first: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(first, after, "re-running migrate must not add rows");
+    }
+
+    #[test]
+    fn geotags_table_present_after_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='geotags'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "geotags table missing after migrate");
     }
 
     #[test]

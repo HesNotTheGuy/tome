@@ -15,8 +15,10 @@
 
 pub mod article;
 pub mod compression;
+pub mod geotag;
 pub mod schema;
 pub mod store;
 
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
+pub use geotag::Geotag;
 pub use store::{ArticleStore, SqliteArticleStore};

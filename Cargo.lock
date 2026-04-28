@@ -5012,6 +5012,7 @@ dependencies = [
 name = "tome-storage"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "rusqlite",
  "serde",
  "tempfile",
