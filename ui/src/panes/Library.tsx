@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { tome } from "../service";
 import { InstalledModule, IS_TAURI } from "../types";
 
@@ -11,7 +11,7 @@ export default function Library({ onOpen }: LibraryProps) {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     if (!IS_TAURI) {
       setLoaded(true);
       return;
@@ -23,35 +23,49 @@ export default function Library({ onOpen }: LibraryProps) {
       .finally(() => setLoaded(true));
   }, []);
 
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
   return (
     <section className="px-6 py-6 max-w-5xl mx-auto">
-      <h2 className="text-2xl font-bold mb-1">Library</h2>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">
-        Modules and installed articles. Open any article in the Reader.
-      </p>
+      <div className="flex items-end justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold mb-1">Library</h2>
+          <p className="text-sm text-tome-muted">
+            Modules and installed articles. Open any article in the Reader.
+          </p>
+        </div>
+      </div>
 
       {!IS_TAURI && (
-        <div className="p-4 mb-6 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 text-sm">
-          Running outside the Tauri shell — backend not connected. Launch via
-          <code className="mx-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900">
+        <div className="p-4 mb-6 rounded border border-tome-border bg-tome-surface-2 text-sm">
+          Running outside the Tauri shell — backend not connected. Launch via{" "}
+          <code className="px-1.5 py-0.5 rounded bg-tome-surface">
             cargo tauri dev
-          </code>
+          </code>{" "}
           to load real data.
         </div>
       )}
 
       {error && (
-        <div className="p-4 mb-6 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 text-sm text-red-700 dark:text-red-300">
+        <div className="p-4 mb-6 rounded border border-tome-border bg-tome-surface-2 text-sm text-tome-danger">
           {error}
         </div>
       )}
 
+      <ImportSection onComplete={refresh} />
+
       {loaded && modules.length === 0 && (
-        <div className="p-6 rounded border border-dashed border-zinc-300 dark:border-zinc-700 text-center text-sm text-zinc-500 dark:text-zinc-400">
+        <div className="p-6 rounded border border-dashed border-tome-border text-center text-sm text-tome-muted">
           No modules installed yet.
           <br />
           <span className="text-xs">
-            Browse Wikipedia categories or import a TOML module to get started.
+            Import a TOML module above to get started. Try{" "}
+            <code className="px-1 py-0.5 rounded bg-tome-surface-2">
+              samples/science-basics.toml
+            </code>
+            .
           </span>
         </div>
       )}
@@ -60,32 +74,113 @@ export default function Library({ onOpen }: LibraryProps) {
         {modules.map((m) => (
           <li
             key={m.spec.id}
-            className="p-4 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-300 dark:hover:border-zinc-700"
+            className="p-4 rounded border border-tome-border bg-tome-surface hover:border-tome-border-strong"
           >
             <div className="flex items-start justify-between gap-2">
               <h3 className="font-semibold">{m.spec.name}</h3>
-              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
                 {m.spec.default_tier}
               </span>
             </div>
             {m.spec.description && (
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400 line-clamp-2">
+              <p className="mt-1 text-sm text-tome-muted line-clamp-2">
                 {m.spec.description}
               </p>
             )}
-            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+            <p className="mt-3 text-xs text-tome-muted">
               {m.member_count.toLocaleString()} articles
             </p>
             <button
               type="button"
-              onClick={() => onOpen(m.spec.name)}
-              className="mt-3 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              onClick={() =>
+                m.spec.explicit_titles[0] && onOpen(m.spec.explicit_titles[0])
+              }
+              className="mt-3 text-sm text-tome-link hover:underline"
             >
-              Open module →
+              Open first article →
             </button>
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+function ImportSection({ onComplete }: { onComplete: () => void }) {
+  const [path, setPath] = useState("");
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [installed, setInstalled] = useState<InstalledModule | null>(null);
+
+  async function handleImport() {
+    if (!IS_TAURI) {
+      setError("import requires the Tauri shell");
+      setPhase("error");
+      return;
+    }
+    if (!path.trim()) {
+      setError("paste the path to a TOML module file");
+      setPhase("error");
+      return;
+    }
+    setPhase("running");
+    setError(null);
+    setInstalled(null);
+    try {
+      const result = await tome.importModuleFromPath(path.trim());
+      setInstalled(result);
+      setPhase("done");
+      setPath("");
+      onComplete();
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-6 p-4 rounded border border-tome-border bg-tome-surface space-y-3">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted">
+        Import module
+      </h3>
+      <p className="text-xs text-tome-muted">
+        Pass the path to a TOML module file. The spec format is documented in{" "}
+        <code className="px-1 py-0.5 rounded bg-tome-surface-2">
+          samples/science-basics.toml
+        </code>
+        . For now, modules install with the spec&apos;s explicit_titles as
+        members; category resolution lands in a follow-up.
+      </p>
+      <input
+        type="text"
+        value={path}
+        onChange={(e) => setPath(e.target.value)}
+        disabled={phase === "running"}
+        placeholder="/path/to/module.toml"
+        className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+      />
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={handleImport}
+          disabled={phase === "running" || !IS_TAURI}
+          className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ backgroundColor: "var(--tome-accent)" }}
+        >
+          {phase === "running" ? "Importing…" : "Import"}
+        </button>
+        {phase === "done" && installed && (
+          <span className="text-xs text-tome-success">
+            ✓ Installed “{installed.spec.name}” — {installed.member_count}{" "}
+            members
+          </span>
+        )}
+        {phase === "error" && error && (
+          <span className="text-xs text-tome-danger">{error}</span>
+        )}
+      </div>
+    </div>
   );
 }

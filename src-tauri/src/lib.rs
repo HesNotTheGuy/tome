@@ -54,6 +54,7 @@ pub fn run() {
             tier_counts,
             ingest_index,
             fetch_revisions,
+            import_module_from_path,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -230,6 +231,17 @@ async fn fetch_revisions(
     state
         .fetch_revisions(&title, limit)
         .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_module_from_path(
+    path: String,
+    state: State<'_, Arc<Tome>>,
+) -> Result<InstalledModule, String> {
+    let path = PathBuf::from(path);
+    state
+        .import_module_from_path(&path)
         .map_err(|e| e.to_string())
 }
 

@@ -246,6 +246,24 @@ impl Tome {
         self.api.fetch_revisions(title, limit).await
     }
 
+    /// Read a TOML module file from `path`, parse it, validate, and install
+    /// using the spec's `explicit_titles` as members. Category resolution
+    /// (calling the MediaWiki API to expand categories into title lists) is
+    /// a follow-up — for now, modules are pure title-list bundles.
+    pub fn import_module_from_path(&self, path: &Path) -> Result<InstalledModule> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| TomeError::Other(format!("read module file {path:?}: {e}")))?;
+        let spec = ModuleSpec::from_toml(&text)?;
+        spec.validate()?;
+        // For v1 we install with whatever explicit_titles the user listed.
+        // Category resolution will fill in titles from Wikipedia categories
+        // once the API surface is wired up.
+        self.modules.install(&spec, &spec.explicit_titles)?;
+        self.modules
+            .get(&spec.id)?
+            .ok_or_else(|| TomeError::Other("install succeeded but module not found".into()))
+    }
+
     // --- Settings / introspection ---
 
     pub fn kill_switch_engaged(&self) -> bool {

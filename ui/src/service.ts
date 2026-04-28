@@ -58,6 +58,7 @@ export interface TomeService {
     onProgress: (count: number) => void,
   ): Promise<IngestSummary>;
   fetchRevisions(title: string, limit: number): Promise<Revision[]>;
+  importModuleFromPath(path: string): Promise<InstalledModule>;
   healthCheck(): Promise<string>;
 }
 
@@ -110,6 +111,9 @@ export const tome: TomeService = {
   },
   fetchRevisions(title, limit) {
     return invoke<Revision[]>("fetch_revisions", { title, limit });
+  },
+  importModuleFromPath(path) {
+    return invoke<InstalledModule>("import_module_from_path", { path });
   },
   async ingestIndex(path, onProgress) {
     if (!IS_TAURI) {
