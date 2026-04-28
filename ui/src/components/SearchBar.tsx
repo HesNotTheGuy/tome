@@ -101,45 +101,76 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && query.trim().length >= 2) {
+            e.preventDefault();
+            onOpenArticle(query.trim());
+            setOpen(false);
+            setQuery("");
+          }
+        }}
         placeholder="Search… (⌘/Ctrl+K)"
-        className="w-full px-3 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="w-full px-3 py-1 text-sm rounded border border-tome-border bg-tome-surface placeholder:text-tome-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
       {open && (query.trim().length >= 2 || error) && (
-        <div className="absolute right-0 top-full mt-1 w-96 max-h-96 overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg z-30">
+        <div className="absolute right-0 top-full mt-1 w-96 max-h-96 overflow-auto rounded-lg border border-tome-border bg-tome-surface shadow-lg z-30">
+          {/* "Open as X" entry — guaranteed path even when the search index */}
+          {/* is empty or the query doesn't match anything indexed. */}
+          {query.trim().length >= 2 && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onOpenArticle(query.trim());
+                setOpen(false);
+                setQuery("");
+              }}
+              className="w-full text-left p-3 border-b border-tome-border hover:bg-tome-surface-2 cursor-pointer"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm">
+                  Open as{" "}
+                  <span className="font-medium">“{query.trim()}”</span>
+                </span>
+                <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
+                  ↵
+                </span>
+              </div>
+              <p className="text-[11px] text-tome-muted mt-0.5">
+                Resolves through Cold tier or the API
+              </p>
+            </button>
+          )}
+
           {error && (
-            <div className="p-3 text-sm text-red-600 dark:text-red-400">
-              {error}
-            </div>
+            <div className="p-3 text-sm text-tome-danger">{error}</div>
           )}
-          {!error && hits.length === 0 && (
-            <div className="p-3 text-sm text-zinc-500 dark:text-zinc-400">
-              No matches.
-            </div>
+          {!error && hits.length > 0 && (
+            <ul className="divide-y divide-tome-border">
+              {hits.map((h) => (
+                <li
+                  key={h.page_id}
+                  onMouseDown={(e) => {
+                    // mousedown so the input doesn't lose focus first and
+                    // dismiss the overlay before pick() runs.
+                    e.preventDefault();
+                    pick(h);
+                  }}
+                  className="p-3 hover:bg-tome-surface-2 cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-sm">{h.title}</span>
+                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
+                      {h.tier}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-tome-muted mt-0.5">
+                    score {h.score.toFixed(2)}
+                  </p>
+                </li>
+              ))}
+            </ul>
           )}
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {hits.map((h) => (
-              <li
-                key={h.page_id}
-                onMouseDown={(e) => {
-                  // mousedown so the input doesn't lose focus first and
-                  // dismiss the overlay before pick() runs.
-                  e.preventDefault();
-                  pick(h);
-                }}
-                className="p-3 hover:bg-zinc-50 dark:hover:bg-zinc-900 cursor-pointer"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-sm">{h.title}</span>
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-                    {h.tier}
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
-                  score {h.score.toFixed(2)}
-                </p>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>

@@ -106,11 +106,35 @@ impl Tome {
     /// - Cold: try cached Parsoid HTML via the API; on failure, decode from
     ///   the dump and render locally
     /// - Evicted: error — caller must confirm before fetching
+    /// - Unknown: try the API directly. This is the "read any article
+    ///   without having ingested a dump" path — useful for browsing online
+    ///   and for letting first-time users try the app before they download
+    ///   25+ GB.
     pub async fn read_article(&self, title: &Title) -> Result<ArticleResponse> {
-        let record = self
-            .storage
-            .lookup(title)?
-            .ok_or_else(|| TomeError::NotFound(title.to_string()))?;
+        let record = match self.storage.lookup(title)? {
+            Some(r) => r,
+            None => {
+                if !self.prefer_api_for_cold {
+                    return Err(TomeError::NotFound(title.to_string()));
+                }
+                // Not in our store — fetch latest from the API. This works
+                // regardless of dump configuration. If the article doesn't
+                // exist on Wikipedia, fetch_html surfaces an Api error which
+                // we map to NotFound so the UI can render the same empty
+                // state for both cases.
+                let html = self
+                    .api
+                    .fetch_html(title.as_str(), None)
+                    .await
+                    .map_err(|e| TomeError::NotFound(format!("{title}: {e}")))?;
+                return Ok(ArticleResponse {
+                    title: title.to_string(),
+                    html,
+                    source: ArticleSource::ApiCachedHtml,
+                    revision_id: None,
+                });
+            }
+        };
 
         let content = self
             .storage
