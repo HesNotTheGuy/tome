@@ -88,6 +88,14 @@ export interface Geotag {
   kind: string | null;
 }
 
+export interface MappedGeotag {
+  page_id: number;
+  title: string;
+  lat: number;
+  lon: number;
+  kind: string | null;
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

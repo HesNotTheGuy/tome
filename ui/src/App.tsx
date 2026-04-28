@@ -4,16 +4,18 @@ import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
 import Browse from "./panes/Browse";
+import MapPane from "./panes/Map";
 import Settings from "./panes/Settings";
 import { PresetPicker, ThemeToggle, useTheme } from "./components/Theme";
 import SearchBar from "./components/SearchBar";
 
-type Pane = "library" | "reader" | "browse" | "archive" | "settings";
+type Pane = "library" | "reader" | "browse" | "map" | "archive" | "settings";
 
 const PANE_LABEL: Record<Pane, string> = {
   library: "Library",
   reader: "Reader",
   browse: "Browse",
+  map: "Map",
   archive: "Archive",
   settings: "Settings",
 };
@@ -69,6 +71,7 @@ export default function App() {
           <Reader title={activeTitle} onNavigate={(t) => setActiveTitle(t)} />
         )}
         {pane === "browse" && <Browse onOpen={(t) => setActiveTitle(t)} />}
+        {pane === "map" && <MapPane onOpen={(t) => setActiveTitle(t)} />}
         {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
         {pane === "settings" && <Settings />}
       </main>

@@ -16,6 +16,7 @@ import {
   GeotagSummary,
   IngestSummary,
   InstalledModule,
+  MappedGeotag,
   ModuleSpec,
   RedirectIngestSummary,
   RelatedArticle,
@@ -67,6 +68,7 @@ export interface TomeService {
   ): Promise<GeotagSummary>;
   countGeotags(): Promise<number>;
   geotagForTitle(title: string): Promise<Geotag | null>;
+  allPrimaryGeotags(): Promise<MappedGeotag[]>;
   ingestCategorylinks(
     path: string,
     onProgress: (count: number) => void,
@@ -157,6 +159,9 @@ export const tome: TomeService = {
   },
   geotagForTitle(title) {
     return invoke<Geotag | null>("geotag_for_title", { title });
+  },
+  allPrimaryGeotags() {
+    return invoke<MappedGeotag[]>("all_primary_geotags");
   },
   async ingestGeotags(path, onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

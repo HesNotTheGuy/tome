@@ -461,3 +461,32 @@
     @apply my-3 p-3 text-sm rounded;
   }
 }
+
+/* -------------------------------------------------------------------------
+ * Map pane.
+ *
+ * Leaflet ships its own .leaflet-container styles; we only theme the cluster
+ * pin and tweak the basemap container so it inherits the surrounding pane.
+ * ----------------------------------------------------------------------- */
+
+.tome-map {
+  background-color: var(--tome-surface);
+}
+
+.tome-map .leaflet-container {
+  background-color: var(--tome-surface-2);
+  font-family: var(--tome-font-body);
+  outline: none;
+}
+
+.tome-cluster {
+  display: inline-block;
+  text-align: center;
+  border-radius: 9999px;
+  background-color: var(--tome-accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 12px;
+  border: 2px solid var(--tome-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}

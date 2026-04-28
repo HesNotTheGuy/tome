@@ -72,6 +72,12 @@ ehthumbs.db
 BUILD_SPEC.md
 DECISIONS.md
 
+# tsc / vite generated
+ui/tsconfig.tsbuildinfo
+ui/tsconfig.node.tsbuildinfo
+ui/vite.config.js
+ui/vite.config.d.ts
+
 # Misc
 *.tmp
 *.bak

@@ -14,7 +14,7 @@ use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_storage::{
     ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, Geotag,
-    Redirect, RelatedArticle,
+    MappedGeotag, Redirect, RelatedArticle,
 };
 use tome_wikitext::Renderer;
 
@@ -475,6 +475,12 @@ impl Tome {
 
     pub fn count_geotags(&self) -> Result<u64> {
         self.storage.count_geotags()
+    }
+
+    /// Every primary geotag whose article we've indexed, joined with its
+    /// title. Powers the Map pane.
+    pub fn all_primary_geotags(&self) -> Result<Vec<MappedGeotag>> {
+        self.storage.all_primary_geotags()
     }
 
     /// Stream-parse a Wikipedia `categorylinks.sql.gz` and bulk-insert each

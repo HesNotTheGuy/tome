@@ -47,6 +47,10 @@ pub trait ArticleStore: Send + Sync {
     /// Primary geotag for an article, if any.
     fn geotag_for(&self, page_id: u64) -> Result<Option<crate::geotag::Geotag>>;
     fn count_geotags(&self) -> Result<u64>;
+    /// Every primary geotag whose article we've indexed, joined with the
+    /// title. Powers the Map pane. Returned in arbitrary order; callers that
+    /// care should sort.
+    fn all_primary_geotags(&self) -> Result<Vec<MappedGeotag>>;
 
     // --- Category links ---
 
@@ -86,6 +90,15 @@ pub trait ArticleStore: Send + Sync {
     /// on "United States".
     fn resolve_redirect(&self, source_title: &Title) -> Result<Option<String>>;
     fn count_redirects(&self) -> Result<u64>;
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MappedGeotag {
+    pub page_id: u64,
+    pub title: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -509,6 +522,34 @@ impl ArticleStore for SqliteArticleStore {
             .query_row("SELECT COUNT(*) FROM geotags", [], |row| row.get(0))
             .map_err(|e| TomeError::Storage(format!("count geotags: {e}")))?;
         Ok(n as u64)
+    }
+
+    fn all_primary_geotags(&self) -> Result<Vec<MappedGeotag>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT g.page_id, a.title, g.lat, g.lon, g.kind
+                 FROM geotags g
+                 JOIN articles a ON a.page_id = g.page_id
+                 WHERE g.primary_ = 1",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare all_primary_geotags: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(MappedGeotag {
+                    page_id: row.get::<_, i64>(0)? as u64,
+                    title: row.get(1)?,
+                    lat: row.get(2)?,
+                    lon: row.get(3)?,
+                    kind: row.get(4)?,
+                })
+            })
+            .map_err(|e| TomeError::Storage(format!("query all_primary_geotags: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row all_primary_geotags: {e}")))?);
+        }
+        Ok(out)
     }
 
     fn batch_upsert_categorylinks(&self, entries: &[crate::category::CategoryLink]) -> Result<u64> {

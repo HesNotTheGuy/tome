@@ -23,7 +23,8 @@ use tome_services::{
     TierCounts, Tome,
 };
 use tome_storage::{
-    ArticleStore, CategoryMember, CategoryMemberKind, Geotag, RelatedArticle, SqliteArticleStore,
+    ArticleStore, CategoryMember, CategoryMemberKind, Geotag, MappedGeotag, RelatedArticle,
+    SqliteArticleStore,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -60,6 +61,7 @@ pub fn run() {
             ingest_geotags,
             count_geotags,
             geotag_for_title,
+            all_primary_geotags,
             ingest_categorylinks,
             category_members,
             categories_for_title,
@@ -305,6 +307,15 @@ fn count_geotags(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
 fn geotag_for_title(title: String, state: State<'_, Arc<Tome>>) -> Result<Option<Geotag>, String> {
     state
         .geotag_for_title(&Title::new(&title))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn all_primary_geotags(state: State<'_, Arc<Tome>>) -> Result<Vec<MappedGeotag>, String> {
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || tome.all_primary_geotags())
+        .await
+        .map_err(|e| format!("all_primary_geotags task join: {e}"))?
         .map_err(|e| e.to_string())
 }
 
