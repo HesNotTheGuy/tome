@@ -1,0 +1,21 @@
+[package]
+name = "tome-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Optional local-AI features for Tome: semantic search and RAG over the article corpus."
+
+[dependencies]
+tome-core = { workspace = true }
+tome-config = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+# Heavy AI deps (candle, fastembed, vector index, llama.cpp bindings) land
+# alongside their respective implementation modules in follow-up commits.
+# Keeping the skeleton dependency-free means a stock build doesn't pay the
+# AI compile-time cost just because the crate exists.

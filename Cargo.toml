@@ -10,6 +10,7 @@ members = [
     "crates/tome-wikitext",
     "crates/tome-modules",
     "crates/tome-archive",
+    "crates/tome-ai",
     "crates/tome-services",
     "src-tauri",
 ]
@@ -77,6 +78,7 @@ tome-search  = { path = "crates/tome-search" }
 tome-wikitext = { path = "crates/tome-wikitext" }
 tome-modules = { path = "crates/tome-modules" }
 tome-archive = { path = "crates/tome-archive" }
+tome-ai      = { path = "crates/tome-ai" }
 tome-services = { path = "crates/tome-services" }
 
 # Test utilities

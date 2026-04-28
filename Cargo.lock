@@ -4860,6 +4860,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tome-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "tome-config",
+ "tome-core",
+ "tracing",
+]
+
+[[package]]
 name = "tome-api"
 version = "0.1.0"
 dependencies = [

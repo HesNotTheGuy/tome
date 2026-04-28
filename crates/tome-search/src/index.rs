@@ -8,9 +8,8 @@ use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::IndexRecordOption;
 use tantivy::{Index as TantivyIndex, IndexWriter, TantivyDocument, Term, doc};
-use tome_core::{Result, Tier, TomeError};
+use tome_core::{Result, SearchHit, Searcher, Tier, TomeError};
 
-use crate::query::SearchHit;
 use crate::schema::TomeSchema;
 
 /// Suggested write buffer per Tantivy guidance: 50–200 MB. Smaller buffers
@@ -152,6 +151,15 @@ fn read_text(doc: &TantivyDocument, field: tantivy::schema::Field) -> Result<Str
     doc.get_first(field)
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .ok_or_else(|| TomeError::Other("doc missing text field".into()))
+}
+
+impl Searcher for Index {
+    fn search(&self, query: &str, limit: usize, tier_filter: &[Tier]) -> Result<Vec<SearchHit>> {
+        Index::search(self, query, limit, tier_filter)
+    }
+    fn name(&self) -> &str {
+        "bm25"
+    }
 }
 
 pub struct Writer {

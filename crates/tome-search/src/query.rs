@@ -1,12 +1,6 @@
 //! Public query types.
+//!
+//! `SearchHit` is re-exported from `tome-core` so `tome-ai` can implement the
+//! same `Searcher` trait without depending on `tome-search`.
 
-use serde::{Deserialize, Serialize};
-use tome_core::Tier;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SearchHit {
-    pub page_id: u64,
-    pub title: String,
-    pub tier: Tier,
-    pub score: f32,
-}
+pub use tome_core::SearchHit;

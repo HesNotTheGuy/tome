@@ -131,7 +131,38 @@ export default function Settings() {
           </span>
         </Row>
       </Section>
+
+      <Section title="AI features (experimental)">
+        <Row label="Master switch">
+          <DisabledToggle label="off" />
+        </Row>
+        <Row label="Semantic search">
+          <DisabledToggle label="not built" />
+        </Row>
+        <Row label="Ask Tome (RAG)">
+          <DisabledToggle label="not built" />
+        </Row>
+        <div className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800">
+          Optional, opt-in, local-only. When enabled, downloads a small
+          embedding model (~150 MB) for concept search and/or a quantized
+          LLM (~2 GB) that answers with citations back to source articles.
+          Both off by default; nothing runs until you turn it on.
+        </div>
+      </Section>
     </section>
+  );
+}
+
+function DisabledToggle({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title="Implementation pending — toggle wires up when the AI subsystem ships."
+      className="px-3 py-1 text-sm rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 cursor-not-allowed"
+    >
+      {label}
+    </button>
   );
 }
 
