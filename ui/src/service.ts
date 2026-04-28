@@ -9,6 +9,9 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import {
   ArticleResponse,
+  CategoryIngestSummary,
+  CategoryMember,
+  CategoryMemberKind,
   Geotag,
   GeotagSummary,
   IngestSummary,
@@ -62,6 +65,18 @@ export interface TomeService {
   ): Promise<GeotagSummary>;
   countGeotags(): Promise<number>;
   geotagForTitle(title: string): Promise<Geotag | null>;
+  ingestCategorylinks(
+    path: string,
+    onProgress: (count: number) => void,
+  ): Promise<CategoryIngestSummary>;
+  categoryMembers(
+    category: string,
+    kind: CategoryMemberKind | null,
+    limit: number,
+  ): Promise<CategoryMember[]>;
+  categoriesForTitle(title: string): Promise<string[]>;
+  searchCategories(prefix: string, limit: number): Promise<string[]>;
+  countCategorylinks(): Promise<number>;
   healthCheck(): Promise<string>;
 }
 
@@ -143,6 +158,34 @@ export const tome: TomeService = {
     } finally {
       unlisten();
     }
+  },
+  async ingestCategorylinks(path, onProgress) {
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>(
+      "categorylinks:progress",
+      (e) => onProgress(e.payload),
+    );
+    try {
+      return await invoke<CategoryIngestSummary>("ingest_categorylinks", { path });
+    } finally {
+      unlisten();
+    }
+  },
+  categoryMembers(category, kind, limit) {
+    return invoke<CategoryMember[]>("category_members", {
+      category,
+      kind,
+      limit,
+    });
+  },
+  categoriesForTitle(title) {
+    return invoke<string[]>("categories_for_title", { title });
+  },
+  searchCategories(prefix, limit) {
+    return invoke<string[]>("search_categories", { prefix, limit });
+  },
+  countCategorylinks() {
+    return invoke<number>("count_categorylinks");
   },
   async ingestIndex(path, onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

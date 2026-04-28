@@ -14,11 +14,13 @@
 //! the rest of the app does not need to know about them.
 
 pub mod article;
+pub mod category;
 pub mod compression;
 pub mod geotag;
 pub mod schema;
 pub mod store;
 
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
+pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
 pub use store::{ArticleStore, SqliteArticleStore};

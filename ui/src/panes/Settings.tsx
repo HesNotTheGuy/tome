@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
-import { GeotagSummary, IngestSummary, isTauri, TierCounts } from "../types";
+import {
+  CategoryIngestSummary,
+  GeotagSummary,
+  IngestSummary,
+  isTauri,
+  TierCounts,
+} from "../types";
 
 interface SettingsState {
   killSwitch: boolean;
@@ -137,6 +143,8 @@ export default function Settings() {
       <IngestSection onComplete={refresh} />
 
       <GeotagSection />
+
+      <CategorylinksSection />
 
       <Section title="AI features (experimental)">
         <Row label="Master switch">
@@ -416,6 +424,110 @@ function Row({
     <div className="flex items-center justify-between gap-4 px-4 py-3">
       <span className="text-sm text-zinc-700 dark:text-zinc-300">{label}</span>
       <div>{children}</div>
+    </div>
+  );
+}
+
+function CategorylinksSection() {
+  const [path, setPath] = useState("");
+  const [count, setCount] = useState<number | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
+    "idle",
+  );
+  const [progress, setProgress] = useState(0);
+  const [summary, setSummary] = useState<CategoryIngestSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .countCategorylinks()
+      .then(setCount)
+      .catch(() => setCount(null));
+  }, []);
+
+  async function handleIngest() {
+    if (!isTauri()) {
+      setError("requires the Tauri shell");
+      setPhase("error");
+      return;
+    }
+    if (!path.trim()) {
+      setError("paste the path to a categorylinks.sql.gz file");
+      setPhase("error");
+      return;
+    }
+    setPhase("running");
+    setProgress(0);
+    setError(null);
+    setSummary(null);
+    try {
+      const result = await tome.ingestCategorylinks(path.trim(), (n) =>
+        setProgress(n),
+      );
+      setSummary(result);
+      setPhase("done");
+      const updated = await tome.countCategorylinks();
+      setCount(updated);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Categorylinks ingestion
+      </h3>
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
+          Optional. Point Tome at a downloaded{" "}
+          <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+            *-categorylinks.sql.gz
+          </code>{" "}
+          to enable category browsing. ~28 MB simplewiki, ~2.4 GB enwiki.
+          The Browse pane appears once any categorylinks are ingested.
+        </p>
+        <div className="text-xs text-tome-muted">
+          Currently stored:{" "}
+          <span className="font-mono text-tome-text">
+            {count?.toLocaleString() ?? "—"}
+          </span>{" "}
+          links
+        </div>
+
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={phase === "running"}
+          placeholder="/path/to/simplewiki-latest-categorylinks.sql.gz"
+          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleIngest}
+            disabled={phase === "running" || !isTauri()}
+            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            {phase === "running"
+              ? `Ingesting… ${progress.toLocaleString()}`
+              : "Ingest categorylinks"}
+          </button>
+          {phase === "done" && summary && (
+            <span className="text-xs text-tome-success">
+              ✓ {summary.entries_processed.toLocaleString()} links in{" "}
+              {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

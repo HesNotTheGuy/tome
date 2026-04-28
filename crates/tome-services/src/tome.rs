@@ -12,7 +12,9 @@ use tome_core::{Result, SearchHit, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
-use tome_storage::{ArticleContent, ArticleStore, Geotag};
+use tome_storage::{
+    ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, Geotag,
+};
 use tome_wikitext::Renderer;
 
 use crate::link_resolver::StorageLinkResolver;
@@ -464,10 +466,95 @@ impl Tome {
     pub fn count_geotags(&self) -> Result<u64> {
         self.storage.count_geotags()
     }
+
+    /// Stream-parse a Wikipedia `categorylinks.sql.gz` and bulk-insert each
+    /// row. Larger than geotags (~28 MB simplewiki, ~2.4 GB enwiki
+    /// compressed; ~5M rows simplewiki, ~250M enwiki). For simplewiki this
+    /// finishes in seconds; for enwiki, several minutes.
+    pub fn ingest_categorylinks<F>(
+        &self,
+        path: &Path,
+        mut on_progress: F,
+    ) -> Result<CategoryIngestSummary>
+    where
+        F: FnMut(u64),
+    {
+        let started = Instant::now();
+        let mut buffer: Vec<CategoryLink> = Vec::with_capacity(INGEST_BATCH_SIZE);
+        let mut total = 0_u64;
+        let mut next_progress = INGEST_PROGRESS_INTERVAL;
+        let storage = self.storage.clone();
+        // Errors that occur inside the parse callback can't propagate
+        // through `parse_file` directly (its callback type is FnMut without
+        // a Result return). We capture into this Option and check after.
+        let mut callback_err: Option<TomeError> = None;
+
+        crate::category_ingest::parse_file(path, |link| {
+            if callback_err.is_some() {
+                return;
+            }
+            buffer.push(link);
+            if buffer.len() >= INGEST_BATCH_SIZE {
+                match storage.batch_upsert_categorylinks(&buffer) {
+                    Ok(n) => {
+                        total += n;
+                        buffer.clear();
+                        if total >= next_progress {
+                            on_progress(total);
+                            next_progress = total + INGEST_PROGRESS_INTERVAL;
+                        }
+                    }
+                    Err(e) => callback_err = Some(e),
+                }
+            }
+        })?;
+        if let Some(e) = callback_err {
+            return Err(e);
+        }
+        if !buffer.is_empty() {
+            total += storage.batch_upsert_categorylinks(&buffer)?;
+        }
+        on_progress(total);
+
+        Ok(CategoryIngestSummary {
+            entries_processed: total,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub fn category_members(
+        &self,
+        category: &str,
+        kind: Option<CategoryMemberKind>,
+        limit: u32,
+    ) -> Result<Vec<CategoryMember>> {
+        self.storage.category_members(category, kind, limit)
+    }
+
+    pub fn categories_for_title(&self, title: &Title) -> Result<Vec<String>> {
+        let Some(rec) = self.storage.lookup(title)? else {
+            return Ok(Vec::new());
+        };
+        self.storage.categories_for(rec.metadata.page_id)
+    }
+
+    pub fn search_categories(&self, prefix: &str, limit: u32) -> Result<Vec<String>> {
+        self.storage.search_categories(prefix, limit)
+    }
+
+    pub fn count_categorylinks(&self) -> Result<u64> {
+        self.storage.count_categorylinks()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeotagSummary {
+    pub entries_processed: u64,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryIngestSummary {
     pub entries_processed: u64,
     pub elapsed_ms: u64,
 }

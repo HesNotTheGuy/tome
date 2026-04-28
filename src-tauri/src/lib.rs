@@ -18,8 +18,10 @@ use tome_archive::{ArchiveStore, SavedRevisionMeta};
 use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
-use tome_services::{ArticleResponse, GeotagSummary, IngestSummary, TierCounts, Tome};
-use tome_storage::{ArticleStore, Geotag, SqliteArticleStore};
+use tome_services::{
+    ArticleResponse, CategoryIngestSummary, GeotagSummary, IngestSummary, TierCounts, Tome,
+};
+use tome_storage::{ArticleStore, CategoryMember, CategoryMemberKind, Geotag, SqliteArticleStore};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -55,6 +57,11 @@ pub fn run() {
             ingest_geotags,
             count_geotags,
             geotag_for_title,
+            ingest_categorylinks,
+            category_members,
+            categories_for_title,
+            search_categories,
+            count_categorylinks,
             fetch_revisions,
             import_module_from_path,
             dump_path,
@@ -291,6 +298,60 @@ fn geotag_for_title(title: String, state: State<'_, Arc<Tome>>) -> Result<Option
     state
         .geotag_for_title(&Title::new(&title))
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ingest_categorylinks(
+    path: String,
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<CategoryIngestSummary, String> {
+    let path = PathBuf::from(path);
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        tome.ingest_categorylinks(&path, |count| {
+            let _ = app.emit("categorylinks:progress", count);
+        })
+    })
+    .await
+    .map_err(|e| format!("categorylinks ingest task join: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn category_members(
+    category: String,
+    kind: Option<String>,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<CategoryMember>, String> {
+    let kind_filter = kind.as_deref().and_then(CategoryMemberKind::parse);
+    state
+        .category_members(&category, kind_filter, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn categories_for_title(title: String, state: State<'_, Arc<Tome>>) -> Result<Vec<String>, String> {
+    state
+        .categories_for_title(&Title::new(&title))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn search_categories(
+    prefix: String,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<String>, String> {
+    state
+        .search_categories(&prefix, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn count_categorylinks(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_categorylinks().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

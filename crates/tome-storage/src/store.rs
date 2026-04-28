@@ -47,6 +47,29 @@ pub trait ArticleStore: Send + Sync {
     /// Primary geotag for an article, if any.
     fn geotag_for(&self, page_id: u64) -> Result<Option<crate::geotag::Geotag>>;
     fn count_geotags(&self) -> Result<u64>;
+
+    // --- Category links ---
+
+    /// Bulk insert categorylinks rows in one transaction. Returns rows
+    /// processed.
+    fn batch_upsert_categorylinks(&self, entries: &[crate::category::CategoryLink]) -> Result<u64>;
+    /// Members of a category. `kind_filter` restricts to a single kind
+    /// (`Page` for article members, `Subcat` for subcategories). Joins the
+    /// articles table to resolve titles for page members; subcategory rows
+    /// return the category name as title (best-effort, since the category
+    /// page itself may not be in our articles table).
+    fn category_members(
+        &self,
+        category: &str,
+        kind_filter: Option<crate::category::CategoryMemberKind>,
+        limit: u32,
+    ) -> Result<Vec<crate::category::CategoryMember>>;
+    /// Categories that contain an article (only `page` kind links).
+    fn categories_for(&self, page_id: u64) -> Result<Vec<String>>;
+    /// Distinct category names matching a prefix (case-insensitive). Used
+    /// by the Browse pane's search input.
+    fn search_categories(&self, prefix: &str, limit: u32) -> Result<Vec<String>>;
+    fn count_categorylinks(&self) -> Result<u64>;
 }
 
 pub struct SqliteArticleStore {
@@ -461,6 +484,146 @@ impl ArticleStore for SqliteArticleStore {
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM geotags", [], |row| row.get(0))
             .map_err(|e| TomeError::Storage(format!("count geotags: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn batch_upsert_categorylinks(&self, entries: &[crate::category::CategoryLink]) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin categorylinks tx: {e}")))?;
+        let mut count = 0_u64;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO categorylinks (cl_from, cl_to, cl_type)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(cl_from, cl_to) DO UPDATE SET cl_type = excluded.cl_type",
+                )
+                .map_err(|e| TomeError::Storage(format!("prepare categorylinks: {e}")))?;
+            for link in entries {
+                stmt.execute(params![
+                    link.from_page_id as i64,
+                    link.category,
+                    link.kind.as_str(),
+                ])
+                .map_err(|e| TomeError::Storage(format!("upsert categorylink: {e}")))?;
+                count += 1;
+            }
+        }
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit categorylinks: {e}")))?;
+        Ok(count)
+    }
+
+    fn category_members(
+        &self,
+        category: &str,
+        kind_filter: Option<crate::category::CategoryMemberKind>,
+        limit: u32,
+    ) -> Result<Vec<crate::category::CategoryMember>> {
+        let conn = self.lock()?;
+        let mut sql = String::from(
+            "SELECT cl.cl_from, cl.cl_type, COALESCE(a.title, REPLACE(cl.cl_to, '_', ' ')) AS display_title \
+             FROM categorylinks cl LEFT JOIN articles a ON a.page_id = cl.cl_from \
+             WHERE cl.cl_to = ?1",
+        );
+        if kind_filter.is_some() {
+            sql.push_str(" AND cl.cl_type = ?2");
+        }
+        sql.push_str(" ORDER BY display_title LIMIT ?3");
+
+        // Categories on Wikipedia use underscores in their internal form; the
+        // user-facing input may use spaces. Normalize the lookup key to the
+        // underscore form so either matches.
+        let key = category.replace(' ', "_");
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| TomeError::Storage(format!("prepare category_members: {e}")))?;
+
+        let map_row =
+            |row: &rusqlite::Row<'_>| -> rusqlite::Result<crate::category::CategoryMember> {
+                let from: i64 = row.get(0)?;
+                let kind_str: String = row.get(1)?;
+                let title: String = row.get(2)?;
+                let kind = crate::category::CategoryMemberKind::parse(&kind_str)
+                    .unwrap_or(crate::category::CategoryMemberKind::Page);
+                Ok(crate::category::CategoryMember {
+                    kind,
+                    title,
+                    page_id: from as u64,
+                })
+            };
+
+        let rows: Vec<_> = if let Some(k) = kind_filter {
+            stmt.query_map(params![key, k.as_str(), limit as i64], map_row)
+                .map_err(|e| TomeError::Storage(format!("query category_members: {e}")))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| TomeError::Storage(format!("collect category_members: {e}")))?
+        } else {
+            stmt.query_map(params![key, limit as i64], map_row)
+                .map_err(|e| TomeError::Storage(format!("query category_members: {e}")))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| TomeError::Storage(format!("collect category_members: {e}")))?
+        };
+
+        Ok(rows)
+    }
+
+    fn categories_for(&self, page_id: u64) -> Result<Vec<String>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT cl_to FROM categorylinks
+                 WHERE cl_from = ?1 AND cl_type = 'page'
+                 ORDER BY cl_to",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare categories_for: {e}")))?;
+        let rows = stmt
+            .query_map(params![page_id as i64], |row| {
+                row.get::<_, String>(0).map(|s| s.replace('_', " "))
+            })
+            .map_err(|e| TomeError::Storage(format!("query categories_for: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    fn search_categories(&self, prefix: &str, limit: u32) -> Result<Vec<String>> {
+        let conn = self.lock()?;
+        // SQLite's LIKE is case-insensitive for ASCII by default. Normalize
+        // spaces to underscores in the pattern so either form works.
+        let pattern = format!("{}%", prefix.replace(' ', "_"));
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT cl_to FROM categorylinks
+                 WHERE cl_to LIKE ?1
+                 ORDER BY cl_to LIMIT ?2",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare search_categories: {e}")))?;
+        let rows = stmt
+            .query_map(params![pattern, limit as i64], |row| {
+                row.get::<_, String>(0).map(|s| s.replace('_', " "))
+            })
+            .map_err(|e| TomeError::Storage(format!("query search_categories: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    fn count_categorylinks(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM categorylinks", [], |row| row.get(0))
+            .map_err(|e| TomeError::Storage(format!("count categorylinks: {e}")))?;
         Ok(n as u64)
     }
 

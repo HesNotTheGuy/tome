@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS geotags (
 CREATE INDEX IF NOT EXISTS idx_geotags_page ON geotags(page_id);
 "#;
 
+const MIGRATION_3: &str = r#"
+CREATE TABLE IF NOT EXISTS categorylinks (
+    cl_from   INTEGER NOT NULL,
+    cl_to     TEXT    NOT NULL,
+    cl_type   TEXT    NOT NULL CHECK (cl_type IN ('page','subcat','file')),
+    PRIMARY KEY (cl_from, cl_to)
+);
+
+CREATE INDEX IF NOT EXISTS idx_categorylinks_to ON categorylinks(cl_to);
+CREATE INDEX IF NOT EXISTS idx_categorylinks_from ON categorylinks(cl_from);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -76,6 +88,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 2: {e}")))?;
     }
 
+    if from < 3 {
+        conn.execute_batch(MIGRATION_3)
+            .map_err(|e| TomeError::Storage(format!("apply migration 3: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![3_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 3: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -88,7 +110,7 @@ mod tests {
     /// The highest migration version this codebase ships. Bump this in lockstep
     /// with new MIGRATION_N constants; the assertion below will catch
     /// mismatches.
-    const CURRENT_VERSION: i32 = 2;
+    const CURRENT_VERSION: i32 = 3;
 
     #[test]
     fn fresh_db_reaches_current_version() {

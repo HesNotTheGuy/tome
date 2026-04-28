@@ -93,6 +93,19 @@ export interface GeotagSummary {
   elapsed_ms: number;
 }
 
+export type CategoryMemberKind = "page" | "subcat" | "file";
+
+export interface CategoryMember {
+  kind: CategoryMemberKind;
+  title: string;
+  page_id: number;
+}
+
+export interface CategoryIngestSummary {
+  entries_processed: number;
+  elapsed_ms: number;
+}
+
 /**
  * Whether we're running inside a Tauri WebView vs. a browser-only dev session.
  *

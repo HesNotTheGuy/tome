@@ -3,15 +3,17 @@ import { useEffect, useState } from "react";
 import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
+import Browse from "./panes/Browse";
 import Settings from "./panes/Settings";
 import { PresetPicker, ThemeToggle, useTheme } from "./components/Theme";
 import SearchBar from "./components/SearchBar";
 
-type Pane = "library" | "reader" | "archive" | "settings";
+type Pane = "library" | "reader" | "browse" | "archive" | "settings";
 
 const PANE_LABEL: Record<Pane, string> = {
   library: "Library",
   reader: "Reader",
+  browse: "Browse",
   archive: "Archive",
   settings: "Settings",
 };
@@ -66,6 +68,7 @@ export default function App() {
         {pane === "reader" && (
           <Reader title={activeTitle} onNavigate={(t) => setActiveTitle(t)} />
         )}
+        {pane === "browse" && <Browse onOpen={(t) => setActiveTitle(t)} />}
         {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
         {pane === "settings" && <Settings />}
       </main>
