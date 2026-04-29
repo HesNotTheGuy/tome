@@ -26,7 +26,6 @@ First-time setup:
 ```bash
 # Rust workspace
 cargo check --workspace
-cargo test --workspace
 
 # Frontend deps
 cd ui && npm install && cd ..
