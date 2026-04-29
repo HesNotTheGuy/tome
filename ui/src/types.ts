@@ -108,6 +108,11 @@ export interface EmbeddingIngestSummary {
   elapsed_ms: number;
 }
 
+export interface ChatAnswer {
+  answer: string;
+  citations: number[];
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

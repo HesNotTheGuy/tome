@@ -12,6 +12,7 @@ import {
   CategoryIngestSummary,
   CategoryMember,
   CategoryMemberKind,
+  ChatAnswer,
   EmbeddingHit,
   EmbeddingIngestSummary,
   Geotag,
@@ -74,6 +75,7 @@ export interface TomeService {
   semanticSearch(query: string, k: number): Promise<EmbeddingHit[]>;
   chatModelPresent(): Promise<boolean>;
   downloadChatModel(onProgress: (bytes: number) => void): Promise<string>;
+  askTome(question: string): Promise<ChatAnswer>;
   ingestGeotags(
     path: string,
     onProgress: (count: number) => void,
@@ -206,6 +208,9 @@ export const tome: TomeService = {
     } finally {
       unlisten();
     }
+  },
+  askTome(question) {
+    return invoke<ChatAnswer>("ask_tome", { question });
   },
   countGeotags() {
     return invoke<number>("count_geotags");

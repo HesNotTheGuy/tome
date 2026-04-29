@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tome_ai::chat::ChatConfig;
+use tome_ai::chat::{ChatAnswer, ChatConfig, ChatContext, ChatEngine, LlamaChatEngine};
 use tome_ai::chat_download;
 use tome_ai::embedding::{DefaultEmbedder, Embedder};
 use tome_api::{MediaWikiClient, Revision};
@@ -850,6 +850,94 @@ impl Tome {
     {
         chat_download::download_chat_model(&self.chat_config(), on_progress).await
     }
+
+    /// Retrieve the top-K most relevant articles for `question` and ask
+    /// the local chat model to answer with citations back to them.
+    ///
+    /// **Two-stage retrieval**: pulls semantic_search hits when an
+    /// embedding index has been built, falls back to lexical Tantivy
+    /// search otherwise. The retrieved articles' titles + first paragraph
+    /// are packed into the prompt as `[A1]`, `[A2]` … snippets the model
+    /// is instructed to cite. We extract those citation indices from the
+    /// model's reply and return them alongside the prose.
+    ///
+    /// Errors from the inference backend (model not downloaded,
+    /// `chat-inference` feature disabled at compile time) propagate up
+    /// so the UI can surface a helpful "set this up first" state.
+    pub fn ask_tome(&self, question: &str) -> Result<ChatAnswer> {
+        if question.trim().is_empty() {
+            return Err(TomeError::Other("empty question".into()));
+        }
+        // Pull a small retrieval set. Try semantic first; if the embedder
+        // isn't ready or returns nothing, fall back to lexical.
+        const RETRIEVAL_K: u32 = 5;
+        const SNIPPET_BYTES: usize = 600;
+
+        let mut context: Vec<ChatContext> = Vec::new();
+        let semantic = self
+            .semantic_search(question, RETRIEVAL_K)
+            .unwrap_or_default();
+        if !semantic.is_empty() {
+            for (i, hit) in semantic.into_iter().enumerate() {
+                context.push(ChatContext {
+                    id: (i + 1) as u32,
+                    page_id: hit.page_id,
+                    title: hit.title,
+                    snippet: String::new(), // filled below
+                });
+            }
+        } else {
+            // Lexical fallback. search() returns SearchHit; we just need
+            // titles + page_ids.
+            let lexical = self.search(question, RETRIEVAL_K as usize, &[])?;
+            for (i, hit) in lexical.into_iter().enumerate() {
+                context.push(ChatContext {
+                    id: (i + 1) as u32,
+                    page_id: hit.page_id,
+                    title: hit.title,
+                    snippet: String::new(),
+                });
+            }
+        }
+
+        // Pull a snippet from each article's stored content. Articles in
+        // Cold tier need a dump read which we skip here (too slow and
+        // requires dump_path to be set); we use whatever the storage
+        // already has and fall back to "(title only)" when nothing is
+        // available locally.
+        for c in context.iter_mut() {
+            match self.storage.get_content(c.page_id) {
+                Ok(Some(tome_storage::ArticleContent::Hot(text))) => {
+                    c.snippet = truncate_snippet(&text, SNIPPET_BYTES);
+                }
+                Ok(Some(tome_storage::ArticleContent::Warm(_))) => {
+                    // Avoid decompressing on the hot path; title-only is
+                    // still useful context for the LLM.
+                    c.snippet = format!("(article '{}' available in storage)", c.title);
+                }
+                _ => {
+                    c.snippet = format!("(no local snippet for '{}')", c.title);
+                }
+            }
+        }
+
+        let engine = LlamaChatEngine::new(self.chat_config())?;
+        engine.answer(question, &context)
+    }
+}
+
+/// Take the first `max` bytes of `text` at a UTF-8 char boundary, append
+/// an ellipsis if truncation happened. Used to build retrieval snippets
+/// without splitting multi-byte sequences.
+fn truncate_snippet(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

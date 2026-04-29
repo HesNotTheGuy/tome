@@ -7,6 +7,7 @@ import {
   RelatedArticle,
   Revision,
 } from "../types";
+import AskTome from "../components/AskTome";
 import Timeline from "../components/Timeline";
 
 interface ReaderProps {
@@ -246,6 +247,7 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
           )}
         </>
       )}
+      <AskTome articleTitle={response?.title ?? title} onOpenArticle={onNavigate} />
     </div>
   );
 }

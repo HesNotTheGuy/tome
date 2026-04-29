@@ -31,9 +31,11 @@ default = []
 # Forwards to tome-ai's feature; the Tauri shell enables this on its
 # tome-services dependency line so the binary build pulls in fastembed.
 semantic-search = ["tome-ai/semantic-search"]
-# Forwards to tome-ai's `chat` feature: HuggingFace model downloader
-# today, llama-cpp-2 inference backend in a follow-up.
+# Forwards to tome-ai's `chat` feature: the HuggingFace model
+# downloader. Inference is gated separately under `chat-inference`
+# because llama-cpp-2's build needs LLVM/libclang.
 chat = ["tome-ai/chat"]
+chat-inference = ["tome-ai/chat-inference"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

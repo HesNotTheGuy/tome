@@ -28,14 +28,25 @@ fastembed = { version = "5", optional = true }
 hf-hub = { version = "0.5", optional = true, default-features = false, features = ["tokio", "rustls-tls"] }
 tokio = { workspace = true, optional = true }
 
+# llama.cpp bindings for the local-LLM inference backend. Pulls in
+# bindgen + cmake to build llama.cpp from source on first compile —
+# expect ~5-10 min cold compile and a C++ toolchain requirement (MSVC
+# on Windows, Xcode CLT on macOS, gcc on Linux). Optional.
+llama-cpp-2 = { version = "0.1", optional = true }
+
 [features]
 default = []
 # Pulls in fastembed + ONNX Runtime. Adds substantial compile time and
 # binary size. Worth it for the semantic search feature; opt-in for crates
 # (like the test harness) that don't need it.
 semantic-search = ["dep:fastembed"]
-# Local-LLM RAG. The trait surface in `chat` module compiles always; this
-# flag unlocks the model download + (in a follow-up commit) the
-# llama-cpp-2 inference backend. Currently turning it on adds the
-# HuggingFace downloader so users can fetch the GGUF model in advance.
+# Chat model download via HuggingFace. Light deps (reqwest + tokio).
+# Independent of the inference backend so users can pre-download the
+# model on machines that don't yet have a C++ + LLVM toolchain.
 chat = ["dep:hf-hub", "dep:tokio"]
+# In-process inference via llama-cpp-2. Pulls in bindgen + cmake +
+# the full llama.cpp C++ source build. Requires LLVM/libclang on the
+# build machine (set LIBCLANG_PATH if the auto-detect fails). On a
+# clean machine this adds ~10 minutes to a cold compile, so it ships
+# as opt-in even on top of `chat`.
+chat-inference = ["chat", "dep:llama-cpp-2"]

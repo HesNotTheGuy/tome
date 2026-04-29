@@ -25,3 +25,7 @@ pub use tome::{
     ArticleResponse, ArticleSource, CategoryIngestSummary, EMBEDDING_MODEL_ID,
     EmbeddingIngestSummary, GeotagSummary, IngestSummary, RedirectIngestSummary, TierCounts, Tome,
 };
+
+// Re-export ChatAnswer so the Tauri shell can return it from `ask_tome`
+// without depending on tome-ai directly.
+pub use tome_ai::chat::ChatAnswer;

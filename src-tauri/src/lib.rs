@@ -22,8 +22,8 @@ use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{
-    ArticleResponse, CategoryIngestSummary, EmbeddingIngestSummary, GeotagSummary, IngestSummary,
-    RedirectIngestSummary, TierCounts, Tome,
+    ArticleResponse, CategoryIngestSummary, ChatAnswer, EmbeddingIngestSummary, GeotagSummary,
+    IngestSummary, RedirectIngestSummary, TierCounts, Tome,
 };
 use tome_storage::{
     ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag, MappedGeotag,
@@ -92,6 +92,7 @@ pub fn run() {
             semantic_search,
             chat_model_present,
             download_chat_model,
+            ask_tome,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -389,6 +390,17 @@ async fn download_chat_model(
         .await
         .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn ask_tome(question: String, state: State<'_, Arc<Tome>>) -> Result<ChatAnswer, String> {
+    let tome = state.inner().clone();
+    // Generation is CPU-bound (model token loop); spawn_blocking keeps
+    // the Tauri reactor responsive while the model thinks.
+    tokio::task::spawn_blocking(move || tome.ask_tome(&question))
+        .await
+        .map_err(|e| format!("ask_tome task join: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
