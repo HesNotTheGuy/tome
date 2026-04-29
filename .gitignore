@@ -72,6 +72,12 @@ ehthumbs.db
 BUILD_SPEC.md
 DECISIONS.md
 
+# Local-only test suites — personal harnesses, not part of the project's
+# committed test surface. The integrity tests at tests/file_integrity.rs
+# ARE committed; only smoke.rs and error_handling.rs are excluded.
+crates/tome-services/tests/smoke.rs
+crates/tome-services/tests/error_handling.rs
+
 # tsc / vite generated
 ui/tsconfig.tsbuildinfo
 ui/tsconfig.node.tsbuildinfo

@@ -79,9 +79,15 @@ impl Index {
         let searcher = reader.searcher();
 
         let parser = QueryParser::for_index(&self.inner, vec![self.schema.title, self.schema.body]);
-        let user_query: Box<dyn Query> = parser
-            .parse_query(query_str)
-            .map_err(|e| TomeError::Other(format!("parse query: {e}")))?;
+        // A user typing into the search box can produce queries Tantivy's
+        // parser rejects (unbalanced quotes, lone `:`, control chars from
+        // paste). Surface those as "no results" rather than scary errors —
+        // search-as-you-type is bad UX if every odd keystroke pops a stack
+        // trace. Real I/O errors below are still propagated.
+        let user_query: Box<dyn Query> = match parser.parse_query(query_str) {
+            Ok(q) => q,
+            Err(_) => return Ok(Vec::new()),
+        };
 
         let final_query: Box<dyn Query> = if tier_filter.is_empty() {
             user_query

@@ -255,6 +255,26 @@ impl Tome {
         limit: usize,
         tier_filter: &[Tier],
     ) -> Result<Vec<SearchHit>> {
+        // Tantivy's TopCollector panics on limit=0 and on very large queries
+        // we'd rather not pass through unbounded. Clamp at the boundary so
+        // callers (UI, tests, fuzzers) can't hand the engine inputs that
+        // crash the process.
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        const MAX_QUERY_BYTES: usize = 4096;
+        const MAX_LIMIT: usize = 500;
+        let query = if query.len() > MAX_QUERY_BYTES {
+            // Truncate at a char boundary to keep utf-8 valid.
+            let mut end = MAX_QUERY_BYTES;
+            while !query.is_char_boundary(end) {
+                end -= 1;
+            }
+            &query[..end]
+        } else {
+            query
+        };
+        let limit = limit.clamp(1, MAX_LIMIT);
         self.search.search(query, limit, tier_filter)
     }
 
@@ -306,6 +326,10 @@ impl Tome {
         query: &str,
         limit: usize,
     ) -> Result<Vec<tome_archive::SavedRevisionMeta>> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 500);
         self.archive.search(query, limit)
     }
 

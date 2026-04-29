@@ -596,10 +596,14 @@ impl ArticleStore for SqliteArticleStore {
              FROM categorylinks cl LEFT JOIN articles a ON a.page_id = cl.cl_from \
              WHERE cl.cl_to = ?1",
         );
+        // Bind positions are positional; the LIMIT placeholder index has to
+        // match the actual count of bound params. Without a kind filter we
+        // bind 2 (key + limit); with one we bind 3.
         if kind_filter.is_some() {
-            sql.push_str(" AND cl.cl_type = ?2");
+            sql.push_str(" AND cl.cl_type = ?2 ORDER BY display_title LIMIT ?3");
+        } else {
+            sql.push_str(" ORDER BY display_title LIMIT ?2");
         }
-        sql.push_str(" ORDER BY display_title LIMIT ?3");
 
         // Categories on Wikipedia use underscores in their internal form; the
         // user-facing input may use spaces. Normalize the lookup key to the
