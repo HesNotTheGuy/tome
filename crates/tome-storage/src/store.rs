@@ -968,8 +968,13 @@ impl ArticleStore for SqliteArticleStore {
             }
         }
 
+        // The heap holds at most `cap` candidates after every push, but
+        // we don't preallocate the full capacity up front — a malicious or
+        // pathological k (u32::MAX) would otherwise allocate ~170 GB and
+        // OOM the process. Start small and let it grow naturally.
         let cap = k as usize;
-        let mut heap: BinaryHeap<Candidate> = BinaryHeap::with_capacity(cap + 1);
+        let mut heap: BinaryHeap<Candidate> =
+            BinaryHeap::with_capacity(cap.min(1024).saturating_add(1));
         for r in rows {
             let (page_id, title, blob) =
                 r.map_err(|e| TomeError::Storage(format!("row cosine: {e}")))?;

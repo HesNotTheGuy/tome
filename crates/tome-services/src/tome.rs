@@ -738,7 +738,12 @@ impl Tome {
         F: FnMut(u64),
     {
         let started = Instant::now();
-        let embedder = self.embedder()?;
+        // Defer embedder init until we know there's actual work — calling
+        // this on an empty corpus (no articles, or all already embedded)
+        // should be a no-op, not trigger a model download / feature-off
+        // error. We init lazily inside the loop the first time we have a
+        // non-empty batch.
+        let mut embedder: Option<Arc<dyn Embedder>> = None;
 
         let mut total = 0_u64;
         loop {
@@ -760,8 +765,17 @@ impl Tome {
                 break; // nothing left to embed
             }
 
+            let emb = match &embedder {
+                Some(e) => e.clone(),
+                None => {
+                    let e = self.embedder()?;
+                    embedder = Some(e.clone());
+                    e
+                }
+            };
+
             let texts: Vec<String> = pending.iter().map(|(_, t)| t.clone()).collect();
-            let vectors = embedder.embed_batch(&texts)?;
+            let vectors = emb.embed_batch(&texts)?;
             if vectors.len() != pending.len() {
                 return Err(TomeError::Other(format!(
                     "embedder returned {} vectors for {} inputs",
@@ -788,15 +802,20 @@ impl Tome {
     }
 
     /// Top-K articles whose embedding is closest to the query, by cosine
-    /// similarity. Empty query short-circuits to no results.
+    /// similarity. Empty query short-circuits to no results. Extreme k
+    /// values are clamped: passing u32::MAX through to top_k_by_cosine
+    /// would have it preallocate a 4-billion-element BinaryHeap (~170 GB)
+    /// and OOM the process. 500 is well above any reasonable UI need.
     ///
     /// Errors from the embedder (model not yet downloaded, feature
     /// disabled) propagate up so the UI can show "Semantic search not
     /// ready" rather than failing the whole search call.
     pub fn semantic_search(&self, query: &str, k: u32) -> Result<Vec<EmbeddingHit>> {
+        const MAX_K: u32 = 500;
         if query.trim().is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let k = k.min(MAX_K);
         let embedder = self.embedder()?;
         let q_vec = embedder.embed_one(query)?;
         self.storage.top_k_by_cosine(EMBEDDING_MODEL_ID, &q_vec, k)
