@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            rust-target: ''
+            tauri-args: ''
+          - platform: macos-arm64
+            os: macos-latest
+            rust-target: aarch64-apple-darwin
+            tauri-args: '--target aarch64-apple-darwin'
+          - platform: macos-x64
+            os: macos-latest
+            rust-target: x86_64-apple-darwin
+            tauri-args: '--target x86_64-apple-darwin'
+          - platform: linux
+            os: ubuntu-22.04
+            rust-target: ''
+            tauri-args: ''
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          key: ${{ matrix.platform }}
+
+      - name: Install frontend dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build and release with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Tome ${{ github.ref_name }}'
+          releaseBody: |
+            ## Tome ${{ github.ref_name }} (Alpha)
+
+            **This is an unsigned alpha build. Expect rough edges and security warnings.**
+
+            ### Platform notes
+
+            - **Windows**: Windows SmartScreen will warn that the publisher is unknown. Click "More info" then "Run anyway" to proceed. Both MSI and NSIS installers are provided, plus a standalone .exe.
+            - **macOS**: Gatekeeper will say the app "cannot be opened because Apple cannot check it for malicious software." Right-click the app and choose "Open" to bypass, or run `xattr -cr /Applications/Tome.app` after installing. Separate DMGs are provided for Apple Silicon (arm64) and Intel (x64).
+            - **Linux**: A `.deb` package and an AppImage are provided. The AppImage is portable; the `.deb` targets Debian/Ubuntu derivatives.
+
+            ### Wikipedia data
+
+            Tome is an offline Wikipedia reader. You will need to download a Wikipedia dump separately from <https://dumps.wikimedia.org/> and import it via the in-app workflow.
+
+            ### Reporting issues
+
+            Please file bugs at <https://github.com/HesNotTheGuy/tome/issues>. Include your OS, the build artifact you installed, and reproduction steps.
+
+            ---
+
+            These binaries are not code-signed. A future release will ship signed installers.
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.tauri-args }}
