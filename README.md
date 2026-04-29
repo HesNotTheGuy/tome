@@ -46,6 +46,42 @@ cd ui && npm run dev      # http://localhost:1420
 
 You'll see an "outside the Tauri shell" banner in each pane — that's expected; backend calls are stubbed.
 
+### Optional: building with the local-LLM chat backend
+
+Tome's "Ask Tome" feature uses [llama.cpp](https://github.com/ggerganov/llama.cpp) under the hood, wrapped via the [`llama-cpp-2`](https://crates.io/crates/llama-cpp-2) crate. That crate compiles llama.cpp from source during `cargo build`, which has additional prerequisites:
+
+- **CMake** — drives llama.cpp's own build.
+- **LLVM / libclang** — `llama-cpp-2` uses [`bindgen`](https://github.com/rust-lang/rust-bindgen) to generate Rust bindings from llama.cpp's C++ headers; `bindgen` requires `libclang` at build time.
+
+Per-platform install:
+
+```bash
+# Windows (via Chocolatey)
+choco install llvm cmake -y
+# bindgen finds libclang automatically when LLVM is installed to its
+# default path. If not, set LIBCLANG_PATH to the dir containing
+# libclang.dll (typically `C:\Program Files\LLVM\bin`).
+
+# macOS (via Homebrew)
+brew install llvm cmake
+export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
+
+# Ubuntu / Debian
+sudo apt-get install -y llvm-dev libclang-dev clang cmake
+```
+
+Then build with the feature enabled:
+
+```bash
+cargo tauri dev --features chat-inference
+# or for a release artifact:
+cargo tauri build --features chat-inference
+```
+
+The first compile takes ~5–10 minutes (llama.cpp itself compiles); subsequent builds use the cached artifacts.
+
+**End-user note:** these prereqs are only for *building* Tome. People who install Tome from a release artifact never need LLVM, CMake, or any of this — those tools are baked into the published binaries by the [release workflow](.github/workflows/release.yml).
+
 ## Acquiring a Wikipedia dump
 
 Tome works against Wikipedia's official multistream dumps. Download the latest from <https://dumps.wikimedia.org/enwiki/>:

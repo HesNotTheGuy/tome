@@ -37,5 +37,13 @@ tome-archive = { workspace = true }
 tome-dump = { workspace = true }
 tome-wikitext = { workspace = true }
 
+[features]
+default = []
+# Forwards to tome-services. Builds with `cargo tauri build --features
+# chat-inference` (or via the GitHub Actions release workflow). Stays
+# off by default so a local `cargo tauri dev` works without an LLVM
+# install — flip it on once you've installed LLVM + cmake locally.
+chat-inference = ["tome-services/chat-inference"]
+
 [dev-dependencies]
 tempfile = { workspace = true }

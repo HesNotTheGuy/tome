@@ -51,7 +51,35 @@ jobs:
             librsvg2-dev \
             patchelf \
             libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+            libjavascriptcoregtk-4.1-dev \
+            cmake
+
+      # llama-cpp-2 (the local LLM inference backend, behind the
+      # `chat-inference` feature) uses bindgen to generate Rust bindings
+      # from llama.cpp's C++ headers. bindgen needs libclang at build
+      # time. cmake drives llama.cpp's own build. Both are build-time
+      # only — end users of Tome never need them.
+      - name: Install LLVM and cmake (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          choco install llvm --version=18.1.8 -y --no-progress
+          choco install cmake -y --no-progress --installargs 'ADD_CMAKE_TO_PATH=System'
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Install LLVM and cmake (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          brew install llvm cmake
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+      - name: Install LLVM (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get install -y llvm-dev libclang-dev clang
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -69,7 +97,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
-          key: ${{ matrix.platform }}
+          # Bump this manually when the chat-inference toolchain changes
+          # — llama.cpp source updates need a clean rebuild because
+          # cmake's intermediate cache is finicky across versions.
+          key: ${{ matrix.platform }}-chat-inference
 
       - name: Install frontend dependencies
         working-directory: ui
@@ -107,4 +138,7 @@ jobs:
             These binaries are not code-signed. A future release will ship signed installers.
           releaseDraft: true
           prerelease: true
-          args: ${{ matrix.tauri-args }}
+          # `--features chat-inference` enables the local-LLM backend
+          # (llama-cpp-2). The matrix entries' `tauri-args` add target
+          # overrides for the macOS arm64/x64 split.
+          args: ${{ matrix.tauri-args }} --features chat-inference
