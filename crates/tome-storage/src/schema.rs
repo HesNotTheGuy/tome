@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS redirects (
 CREATE INDEX IF NOT EXISTS idx_redirects_target ON redirects(target_title);
 "#;
 
+// Article embeddings for semantic search. The `model` column lets us detect
+// stale rows when the embedding model is upgraded — a future ingest run can
+// re-embed articles whose stored vector was produced by a previous model.
+// Vectors are stored as raw little-endian f32 blobs (4 bytes per dimension).
+const MIGRATION_5: &str = r#"
+CREATE TABLE IF NOT EXISTS article_embeddings (
+    page_id    INTEGER PRIMARY KEY REFERENCES articles(page_id) ON DELETE CASCADE,
+    embedding  BLOB    NOT NULL,
+    model      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_embeddings_model ON article_embeddings(model);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -117,6 +131,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 4: {e}")))?;
     }
 
+    if from < 5 {
+        conn.execute_batch(MIGRATION_5)
+            .map_err(|e| TomeError::Storage(format!("apply migration 5: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![5_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 5: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -129,7 +153,7 @@ mod tests {
     /// The highest migration version this codebase ships. Bump this in lockstep
     /// with new MIGRATION_N constants; the assertion below will catch
     /// mismatches.
-    const CURRENT_VERSION: i32 = 4;
+    const CURRENT_VERSION: i32 = 5;
 
     #[test]
     fn fresh_db_reaches_current_version() {

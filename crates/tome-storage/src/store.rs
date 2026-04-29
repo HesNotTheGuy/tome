@@ -90,6 +90,33 @@ pub trait ArticleStore: Send + Sync {
     /// on "United States".
     fn resolve_redirect(&self, source_title: &Title) -> Result<Option<String>>;
     fn count_redirects(&self) -> Result<u64>;
+
+    // --- Article embeddings (semantic search) ---
+
+    /// Bulk insert/update embeddings in one transaction. Each entry is the
+    /// page id, the raw f32 vector (variable dim, must match the model), and
+    /// the model identifier (e.g. `"bge-small-en-v1.5"`). Existing rows for
+    /// the same page_id are overwritten. Returns rows processed.
+    fn batch_upsert_embeddings(&self, entries: &[(u64, Vec<f32>, &str)]) -> Result<u64>;
+    /// Number of articles with an embedding stored under `model`. Used by
+    /// the Settings UI to show ingest progress.
+    fn count_embeddings(&self, model: &str) -> Result<u64>;
+    /// Article ids that exist in `articles` but have no embedding for
+    /// `model`. Used by the incremental embed-articles loop. Returned in
+    /// page_id order; cap with `limit` so the caller can chunk the work.
+    fn articles_without_embedding(&self, model: &str, limit: u32) -> Result<Vec<(u64, String)>>;
+    /// Top-K articles by cosine similarity to `query`. Brute-force scan
+    /// over every stored embedding for `model` — fast enough for
+    /// simplewiki (~250K) but will need an HNSW index for full enwiki.
+    /// Returns rows ordered by descending score in `[-1.0, 1.0]`.
+    fn top_k_by_cosine(&self, model: &str, query: &[f32], k: u32) -> Result<Vec<EmbeddingHit>>;
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EmbeddingHit {
+    pub page_id: u64,
+    pub title: String,
+    pub score: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -813,6 +840,198 @@ impl ArticleStore for SqliteArticleStore {
             .map(|v| v as u64)
             .collect())
     }
+
+    fn batch_upsert_embeddings(&self, entries: &[(u64, Vec<f32>, &str)]) -> Result<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin embeddings tx: {e}")))?;
+        let mut count = 0_u64;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO article_embeddings (page_id, embedding, model)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(page_id) DO UPDATE
+                       SET embedding = excluded.embedding,
+                           model = excluded.model",
+                )
+                .map_err(|e| TomeError::Storage(format!("prepare embedding upsert: {e}")))?;
+            for (page_id, vec, model) in entries {
+                let bytes = vec_f32_to_blob(vec);
+                stmt.execute(params![*page_id as i64, bytes, *model])
+                    .map_err(|e| TomeError::Storage(format!("upsert embedding: {e}")))?;
+                count += 1;
+            }
+        }
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit embeddings: {e}")))?;
+        Ok(count)
+    }
+
+    fn count_embeddings(&self, model: &str) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM article_embeddings WHERE model = ?1",
+                params![model],
+                |row| row.get(0),
+            )
+            .map_err(|e| TomeError::Storage(format!("count embeddings: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn articles_without_embedding(&self, model: &str, limit: u32) -> Result<Vec<(u64, String)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.page_id, a.title
+                 FROM articles a
+                 LEFT JOIN article_embeddings e
+                   ON e.page_id = a.page_id AND e.model = ?1
+                 WHERE e.page_id IS NULL
+                 ORDER BY a.page_id
+                 LIMIT ?2",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare missing-emb: {e}")))?;
+        let rows = stmt
+            .query_map(params![model, limit as i64], |row| {
+                let id: i64 = row.get(0)?;
+                let title: String = row.get(1)?;
+                Ok((id as u64, title))
+            })
+            .map_err(|e| TomeError::Storage(format!("query missing-emb: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row missing-emb: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    fn top_k_by_cosine(&self, model: &str, query: &[f32], k: u32) -> Result<Vec<EmbeddingHit>> {
+        if query.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        // Pre-compute the query's L2 norm once. Per-row work then becomes
+        // dot(query, row) / (|query| * |row|).
+        let q_norm_sq: f32 = query.iter().map(|x| x * x).sum();
+        let q_norm = q_norm_sq.sqrt();
+        if q_norm == 0.0 {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.page_id, a.title, e.embedding
+                 FROM article_embeddings e
+                 JOIN articles a ON a.page_id = e.page_id
+                 WHERE e.model = ?1",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare cosine scan: {e}")))?;
+        let rows = stmt
+            .query_map(params![model], |row| {
+                let id: i64 = row.get(0)?;
+                let title: String = row.get(1)?;
+                let blob: Vec<u8> = row.get(2)?;
+                Ok((id as u64, title, blob))
+            })
+            .map_err(|e| TomeError::Storage(format!("query cosine scan: {e}")))?;
+
+        // Maintain a fixed-size top-K min-heap so we never hold more than K
+        // candidates in memory regardless of corpus size.
+        use std::cmp::Ordering;
+        use std::collections::BinaryHeap;
+
+        #[derive(PartialEq)]
+        struct Candidate {
+            score: f32,
+            page_id: u64,
+            title: String,
+        }
+        impl Eq for Candidate {}
+        impl Ord for Candidate {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // Reverse so BinaryHeap's max-heap behaves as min-heap on score.
+                other
+                    .score
+                    .partial_cmp(&self.score)
+                    .unwrap_or(Ordering::Equal)
+            }
+        }
+        impl PartialOrd for Candidate {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        let cap = k as usize;
+        let mut heap: BinaryHeap<Candidate> = BinaryHeap::with_capacity(cap + 1);
+        for r in rows {
+            let (page_id, title, blob) =
+                r.map_err(|e| TomeError::Storage(format!("row cosine: {e}")))?;
+            let row_vec = match blob_to_vec_f32(&blob) {
+                Some(v) if v.len() == query.len() => v,
+                _ => continue, // dim mismatch or corrupt blob — skip rather than fail the whole search
+            };
+            let mut dot = 0.0f32;
+            let mut row_norm_sq = 0.0f32;
+            for (a, b) in query.iter().zip(row_vec.iter()) {
+                dot += a * b;
+                row_norm_sq += b * b;
+            }
+            if row_norm_sq == 0.0 {
+                continue;
+            }
+            let score = dot / (q_norm * row_norm_sq.sqrt());
+            heap.push(Candidate {
+                score,
+                page_id,
+                title,
+            });
+            if heap.len() > cap {
+                heap.pop();
+            }
+        }
+
+        let mut out: Vec<EmbeddingHit> = heap
+            .into_iter()
+            .map(|c| EmbeddingHit {
+                page_id: c.page_id,
+                title: c.title,
+                score: c.score,
+            })
+            .collect();
+        out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        Ok(out)
+    }
+}
+
+/// Encode a vector of f32 as little-endian bytes for SQLite BLOB storage.
+fn vec_f32_to_blob(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out
+}
+
+/// Decode a SQLite BLOB back into f32 values. Returns `None` if the blob
+/// length isn't a multiple of 4 (i.e. it's corrupt). Does not validate
+/// dimension; the caller should compare to the expected `dim()`.
+fn blob_to_vec_f32(b: &[u8]) -> Option<Vec<f32>> {
+    if b.len() % 4 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(b.len() / 4);
+    for chunk in b.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().ok()?;
+        out.push(f32::from_le_bytes(arr));
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -1054,5 +1273,139 @@ mod tests {
         assert_eq!(store.count_by_tier(Tier::Hot).unwrap(), 1);
         assert_eq!(store.count_by_tier(Tier::Warm).unwrap(), 0);
         assert_eq!(store.count_by_tier(Tier::Evicted).unwrap(), 0);
+    }
+
+    // --- Embedding tests --------------------------------------------------
+
+    fn seed_articles(store: &SqliteArticleStore, n: u64) {
+        for i in 1..=n {
+            store
+                .upsert_metadata(&cold_meta(i, &format!("A{i}"), i * 100))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn embeddings_round_trip_through_blob_storage() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 3);
+
+        // Use distinct vectors so cosine ranks them deterministically.
+        let entries = vec![
+            (1u64, vec![1.0f32, 0.0, 0.0], "test-model"),
+            (2u64, vec![0.0f32, 1.0, 0.0], "test-model"),
+            (3u64, vec![0.5f32, 0.5, 0.0], "test-model"),
+        ];
+        let n = store.batch_upsert_embeddings(&entries).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(store.count_embeddings("test-model").unwrap(), 3);
+        assert_eq!(store.count_embeddings("other-model").unwrap(), 0);
+    }
+
+    #[test]
+    fn upsert_embedding_overwrites_existing_row() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 1);
+        store
+            .batch_upsert_embeddings(&[(1, vec![1.0, 0.0], "m")])
+            .unwrap();
+        store
+            .batch_upsert_embeddings(&[(1, vec![0.0, 1.0], "m")])
+            .unwrap();
+        // Still only one row for this page+model.
+        assert_eq!(store.count_embeddings("m").unwrap(), 1);
+        // And cosine should now match the new vector, not the old.
+        let hits = store.top_k_by_cosine("m", &[0.0, 1.0], 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!((hits[0].score - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn top_k_by_cosine_orders_by_similarity_descending() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 4);
+        store
+            .batch_upsert_embeddings(&[
+                (1, vec![1.0, 0.0], "m"),   // perfect match for query [1,0]
+                (2, vec![0.71, 0.71], "m"), // 45° off → cos ≈ 0.71
+                (3, vec![0.0, 1.0], "m"),   // orthogonal → cos = 0
+                (4, vec![-1.0, 0.0], "m"),  // opposite → cos = -1
+            ])
+            .unwrap();
+        let hits = store.top_k_by_cosine("m", &[1.0, 0.0], 4).unwrap();
+        assert_eq!(hits.len(), 4);
+        assert_eq!(hits[0].page_id, 1);
+        assert!((hits[0].score - 1.0).abs() < 1e-5);
+        assert_eq!(hits[1].page_id, 2);
+        assert_eq!(hits[2].page_id, 3);
+        assert_eq!(hits[3].page_id, 4);
+    }
+
+    #[test]
+    fn top_k_caps_results() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 5);
+        for i in 1..=5 {
+            store
+                .batch_upsert_embeddings(&[(i, vec![i as f32, 0.0], "m")])
+                .unwrap();
+        }
+        let hits = store.top_k_by_cosine("m", &[1.0, 0.0], 2).unwrap();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn top_k_with_zero_query_returns_empty() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 1);
+        store
+            .batch_upsert_embeddings(&[(1, vec![1.0, 1.0], "m")])
+            .unwrap();
+        let hits = store.top_k_by_cosine("m", &[0.0, 0.0], 5).unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn top_k_skips_dim_mismatched_rows() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 2);
+        store
+            .batch_upsert_embeddings(&[
+                (1, vec![1.0, 0.0, 0.0], "m"), // wrong dim — skipped
+                (2, vec![1.0, 0.0], "m"),      // matches query dim
+            ])
+            .unwrap();
+        let hits = store.top_k_by_cosine("m", &[1.0, 0.0], 5).unwrap();
+        assert_eq!(hits.len(), 1, "dim-mismatched row must be skipped");
+        assert_eq!(hits[0].page_id, 2);
+    }
+
+    #[test]
+    fn articles_without_embedding_lists_only_unembedded() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 5);
+        store
+            .batch_upsert_embeddings(&[(1, vec![1.0, 0.0], "m"), (3, vec![0.5, 0.5], "m")])
+            .unwrap();
+        let pending = store.articles_without_embedding("m", 100).unwrap();
+        let ids: Vec<u64> = pending.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![2, 4, 5]);
+
+        // A different model has no embeddings at all → all 5 pending.
+        let other = store.articles_without_embedding("other", 100).unwrap();
+        assert_eq!(other.len(), 5);
+    }
+
+    #[test]
+    fn embeddings_are_namespaced_by_model() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 1);
+        store
+            .batch_upsert_embeddings(&[(1, vec![1.0, 0.0], "model-a")])
+            .unwrap();
+        // Querying under a different model name returns nothing — the row
+        // exists only under model-a.
+        let hits = store.top_k_by_cosine("model-b", &[1.0, 0.0], 5).unwrap();
+        assert!(hits.is_empty());
     }
 }
