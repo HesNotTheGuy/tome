@@ -42,6 +42,7 @@
 //! these features.
 
 pub mod chat;
+pub mod chat_download;
 pub mod embedding;
 pub mod rag;
 

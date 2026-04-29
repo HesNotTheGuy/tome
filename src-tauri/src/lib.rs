@@ -90,6 +90,8 @@ pub fn run() {
             embed_articles,
             count_embeddings,
             semantic_search,
+            chat_model_present,
+            download_chat_model,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -367,6 +369,26 @@ async fn semantic_search(
         .await
         .map_err(|e| format!("semantic search task join: {e}"))?
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn chat_model_present(state: State<'_, Arc<Tome>>) -> bool {
+    state.chat_model_present()
+}
+
+#[tauri::command]
+async fn download_chat_model(
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<String, String> {
+    let tome = state.inner().clone();
+    let path = tome
+        .download_chat_model(move |bytes| {
+            let _ = app.emit("ai:chat_download_progress", bytes);
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]

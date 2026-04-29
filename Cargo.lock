@@ -1987,16 +1987,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aef3982638978efa195ff11b305f51f1f22f4f0a6cabee7af79b383ebee6a213"
 dependencies = [
  "dirs 6.0.0",
+ "futures",
  "http",
  "indicatif",
  "libc",
  "log",
  "native-tls",
+ "num_cpus",
  "rand 0.9.4",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "ureq",
  "windows-sys 0.61.2",
 ]
@@ -6024,8 +6027,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "fastembed",
+ "hf-hub",
  "serde",
  "serde_json",
+ "tokio",
  "tome-config",
  "tome-core",
  "tracing",

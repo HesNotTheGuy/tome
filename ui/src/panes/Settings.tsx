@@ -202,32 +202,11 @@ export default function Settings() {
 
       <SemanticSearchSection />
 
-      <Section title="Ask Tome (RAG)">
-        <Row label="Status">
-          <DisabledToggle label="not built" />
-        </Row>
-        <div className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800">
-          A future commit. Will add a chat surface that asks the local LLM
-          to answer with citations back to source articles. Tracked at
-          docs/research/local-llm-landscape.md.
-        </div>
-      </Section>
+      <ChatModelSection />
     </section>
   );
 }
 
-function DisabledToggle({ label }: { label: string }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title="Implementation pending — toggle wires up when the AI subsystem ships."
-      className="px-3 py-1 text-sm rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 cursor-not-allowed"
-    >
-      {label}
-    </button>
-  );
-}
 
 function DumpPathSection() {
   const [stored, setStored] = useState<string | null>(null);
@@ -977,6 +956,88 @@ function SemanticSearchSection() {
         will surface compass and map articles even when those words don&apos;t
         appear in the title. Resumable — interrupting and re-running picks
         up where it left off.
+      </div>
+    </Section>
+  );
+}
+
+function ChatModelSection() {
+  const [present, setPresent] = useState<boolean | null>(null);
+  const [phase, setPhase] = useState<"idle" | "downloading" | "done" | "error">(
+    "idle",
+  );
+  const [bytes, setBytes] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .chatModelPresent()
+      .then(setPresent)
+      .catch(() => setPresent(null));
+  }, []);
+
+  async function handleDownload() {
+    if (!isTauri()) return;
+    setPhase("downloading");
+    setBytes(0);
+    setError(null);
+    try {
+      await tome.downloadChatModel((n) => setBytes(n));
+      setPhase("done");
+      setPresent(true);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <Section title="Ask Tome (chat model)">
+      <Row label="Model">
+        <span className="text-xs font-mono text-tome-muted">
+          microsoft/Phi-4-mini-instruct (Q4_K_M, ~2.3 GB)
+        </span>
+      </Row>
+      <Row label="Status">
+        {present === null && (
+          <span className="text-xs text-tome-muted">checking…</span>
+        )}
+        {present === true && (
+          <span className="text-xs text-tome-success">✓ downloaded</span>
+        )}
+        {present === false && (
+          <span className="text-xs text-tome-muted">not downloaded</span>
+        )}
+      </Row>
+      <Row label="">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={phase === "downloading" || present === true || !isTauri()}
+            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            {phase === "downloading"
+              ? bytes > 0
+                ? `Downloading… ${(bytes / (1024 * 1024)).toFixed(1)} MB`
+                : "Downloading…"
+              : present
+                ? "Already on disk"
+                : "Download"}
+          </button>
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </Row>
+      <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+        One-time download from HuggingFace. Once on disk, &quot;Ask Tome&quot;
+        in the Reader will answer questions with citations to source
+        articles — fully offline, no cloud calls. The chat backend itself
+        ships in a follow-up commit; this lets you start the download
+        ahead of time.
       </div>
     </Section>
   );

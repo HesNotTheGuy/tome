@@ -72,6 +72,8 @@ export interface TomeService {
   ): Promise<EmbeddingIngestSummary>;
   countEmbeddings(): Promise<number>;
   semanticSearch(query: string, k: number): Promise<EmbeddingHit[]>;
+  chatModelPresent(): Promise<boolean>;
+  downloadChatModel(onProgress: (bytes: number) => void): Promise<string>;
   ingestGeotags(
     path: string,
     onProgress: (count: number) => void,
@@ -189,6 +191,21 @@ export const tome: TomeService = {
   },
   semanticSearch(query, k) {
     return invoke<EmbeddingHit[]>("semantic_search", { query, k });
+  },
+  chatModelPresent() {
+    return invoke<boolean>("chat_model_present");
+  },
+  async downloadChatModel(onProgress) {
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>(
+      "ai:chat_download_progress",
+      (e) => onProgress(e.payload),
+    );
+    try {
+      return await invoke<string>("download_chat_model");
+    } finally {
+      unlisten();
+    }
   },
   countGeotags() {
     return invoke<number>("count_geotags");

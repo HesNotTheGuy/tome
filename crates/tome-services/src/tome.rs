@@ -5,6 +5,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use tome_ai::chat::ChatConfig;
+use tome_ai::chat_download;
 use tome_ai::embedding::{DefaultEmbedder, Embedder};
 use tome_api::{MediaWikiClient, Revision};
 use tome_archive::ArchiveStore;
@@ -819,6 +821,34 @@ impl Tome {
         let embedder = self.embedder()?;
         let q_vec = embedder.embed_one(query)?;
         self.storage.top_k_by_cosine(EMBEDDING_MODEL_ID, &q_vec, k)
+    }
+
+    // --- Chat (RAG) ---------------------------------------------------------
+
+    /// Default chat configuration with cache_dir rooted at our app data
+    /// dir so model files live alongside everything else and a single
+    /// folder delete resets all of Tome's state.
+    fn chat_config(&self) -> ChatConfig {
+        ChatConfig {
+            cache_dir: self.data_dir.join("ai").join("chat-models"),
+            ..ChatConfig::default()
+        }
+    }
+
+    /// Whether the chat model file is already on disk.
+    pub fn chat_model_present(&self) -> bool {
+        chat_download::is_present(&self.chat_config())
+    }
+
+    /// Async download of the chat model from HuggingFace. Long-running:
+    /// the file is ~2.3 GB, so the caller should run this on a worker
+    /// thread and surface progress to the UI. Re-running on a partial
+    /// download resumes via hf-hub's internal cache.
+    pub async fn download_chat_model<F>(&self, on_progress: F) -> Result<PathBuf>
+    where
+        F: FnMut(u64) + Send + 'static,
+    {
+        chat_download::download_chat_model(&self.chat_config(), on_progress).await
     }
 }
 

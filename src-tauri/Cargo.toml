@@ -28,7 +28,7 @@ async-trait = { workspace = true }
 
 tome-core = { workspace = true }
 tome-config = { workspace = true }
-tome-services = { workspace = true, features = ["semantic-search"] }
+tome-services = { workspace = true, features = ["semantic-search", "chat"] }
 tome-storage = { workspace = true }
 tome-api = { workspace = true }
 tome-search = { workspace = true }

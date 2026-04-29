@@ -21,11 +21,12 @@ async-trait = { workspace = true }
 # Runtime DLL footprint. The Tauri shell enables this feature explicitly.
 fastembed = { version = "5", optional = true }
 
-# Optional local-LLM dep, behind the `chat` feature. llama-cpp-2 wraps
-# llama.cpp via bindgen + cmake, so enabling it pulls in a C++ build
-# toolchain. The actual integration is wired in the next commit; this
-# crate just declares the dep so the trait + types module compiles.
-# llama-cpp-2 = { version = "0.1", optional = true }
+# HuggingFace download client for fetching the GGUF model file. Pure-Rust
+# stack (reqwest + tokio); much lighter than llama.cpp's build, so it can
+# ship under the `chat` feature without committing us to a particular
+# inference backend yet. Optional, so a stock build doesn't compile it.
+hf-hub = { version = "0.5", optional = true, default-features = false, features = ["tokio", "rustls-tls"] }
+tokio = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -33,7 +34,8 @@ default = []
 # binary size. Worth it for the semantic search feature; opt-in for crates
 # (like the test harness) that don't need it.
 semantic-search = ["dep:fastembed"]
-# Local-LLM RAG. Trait surface lives in `chat` module always; this flag
-# unlocks the working backend in a follow-up commit. Currently the
-# `chat`-feature path is a stub that errors with "implementation pending."
-chat = []
+# Local-LLM RAG. The trait surface in `chat` module compiles always; this
+# flag unlocks the model download + (in a follow-up commit) the
+# llama-cpp-2 inference backend. Currently turning it on adds the
+# HuggingFace downloader so users can fetch the GGUF model in advance.
+chat = ["dep:hf-hub", "dep:tokio"]
