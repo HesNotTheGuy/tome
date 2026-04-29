@@ -41,6 +41,7 @@
 //! (compile time, binary size, cold start) for users who never enable
 //! these features.
 
+pub mod chat;
 pub mod embedding;
 pub mod rag;
 

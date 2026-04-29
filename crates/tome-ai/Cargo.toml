@@ -12,6 +12,7 @@ description = "Optional local-AI features for Tome: semantic search and RAG over
 tome-core = { workspace = true }
 tome-config = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 
@@ -20,9 +21,19 @@ async-trait = { workspace = true }
 # Runtime DLL footprint. The Tauri shell enables this feature explicitly.
 fastembed = { version = "5", optional = true }
 
+# Optional local-LLM dep, behind the `chat` feature. llama-cpp-2 wraps
+# llama.cpp via bindgen + cmake, so enabling it pulls in a C++ build
+# toolchain. The actual integration is wired in the next commit; this
+# crate just declares the dep so the trait + types module compiles.
+# llama-cpp-2 = { version = "0.1", optional = true }
+
 [features]
 default = []
 # Pulls in fastembed + ONNX Runtime. Adds substantial compile time and
 # binary size. Worth it for the semantic search feature; opt-in for crates
 # (like the test harness) that don't need it.
 semantic-search = ["dep:fastembed"]
+# Local-LLM RAG. Trait surface lives in `chat` module always; this flag
+# unlocks the working backend in a follow-up commit. Currently the
+# `chat`-feature path is a stub that errors with "implementation pending."
+chat = []
