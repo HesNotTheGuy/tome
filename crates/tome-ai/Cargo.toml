@@ -15,7 +15,14 @@ serde = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 
-# Heavy AI deps (candle, fastembed, vector index, llama.cpp bindings) land
-# alongside their respective implementation modules in follow-up commits.
-# Keeping the skeleton dependency-free means a stock build doesn't pay the
-# AI compile-time cost just because the crate exists.
+# Optional embedding dep, behind the `semantic-search` feature so a stock
+# build doesn't pay the ~10 min cold compile cost or the ~100 MB ONNX
+# Runtime DLL footprint. The Tauri shell enables this feature explicitly.
+fastembed = { version = "5", optional = true }
+
+[features]
+default = []
+# Pulls in fastembed + ONNX Runtime. Adds substantial compile time and
+# binary size. Worth it for the semantic search feature; opt-in for crates
+# (like the test harness) that don't need it.
+semantic-search = ["dep:fastembed"]
