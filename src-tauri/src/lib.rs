@@ -8,6 +8,7 @@
 //! errors as plain strings to the frontend. The string is the
 //! `Display` form of [`tome_core::TomeError`].
 
+mod nav_guard;
 mod pmtiles_protocol;
 
 use std::sync::Arc;
@@ -47,6 +48,7 @@ pub fn run() {
         .setup(|app| {
             let tome = build_tome(app)?;
             app.manage(Arc::new(tome));
+            build_main_window(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -89,6 +91,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Construct the main webview window with the navigation guard attached.
+///
+/// We build the window in Rust setup rather than declaring it in
+/// `tauri.conf.json` because [`tauri::WebviewWindowBuilder::on_navigation`]
+/// is only available before `build()` — there's no after-the-fact way to
+/// attach a navigation listener to a window Tauri creates from config.
+fn build_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = app.handle().clone();
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Tome")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(800.0, 500.0)
+        .resizable(true)
+        .fullscreen(false)
+        .on_navigation(move |url| {
+            if nav_guard::is_internal_url(url) {
+                return true;
+            }
+            nav_guard::open_external(&handle, url);
+            false
+        })
+        .build()?;
+    Ok(())
 }
 
 fn build_tome(app: &tauri::App) -> Result<Tome, Box<dyn std::error::Error>> {
