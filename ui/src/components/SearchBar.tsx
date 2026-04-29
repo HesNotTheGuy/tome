@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { tome } from "../service";
-import { isTauri, SearchHit, Tier } from "../types";
+import { EmbeddingHit, isTauri, SearchHit, Tier } from "../types";
 
 interface SearchBarProps {
   onOpenArticle: (title: string) => void;
@@ -11,6 +11,10 @@ const ALL_TIERS: Tier[] = []; // empty = no tier filter
 export default function SearchBar({ onOpenArticle }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  // Semantic results are best-effort: if the user hasn't built the index,
+  // or the embedder fails to load, we silently show nothing rather than
+  // pollute the dropdown with errors. Lexical search is the primary surface.
+  const [semanticHits, setSemanticHits] = useState<EmbeddingHit[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +52,7 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
   useEffect(() => {
     if (query.trim().length < 2) {
       setHits([]);
+      setSemanticHits([]);
       return;
     }
     if (!isTauri()) {
@@ -59,12 +64,18 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
           score: 0,
         },
       ]);
+      setSemanticHits([]);
       return;
     }
     let canceled = false;
     const handle = setTimeout(() => {
+      const trimmed = query.trim();
+      // Fire both searches in parallel. Lexical is the source of truth for
+      // the dropdown's main list; semantic populates a "Related by meaning"
+      // section below it. Each updates its own state on its own timeline so
+      // a slow semantic call doesn't delay lexical hits showing up.
       tome
-        .search(query.trim(), 10, ALL_TIERS)
+        .search(trimmed, 10, ALL_TIERS)
         .then((r) => {
           if (!canceled) {
             setHits(r);
@@ -77,6 +88,17 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
             setHits([]);
           }
         });
+      tome
+        .semanticSearch(trimmed, 8)
+        .then((r) => {
+          if (!canceled) setSemanticHits(r);
+        })
+        .catch(() => {
+          // Silently drop. Common reasons: index not built, model not yet
+          // downloaded, feature disabled at compile time. None worth
+          // surfacing to a user mid-search.
+          if (!canceled) setSemanticHits([]);
+        });
     }, 120);
     return () => {
       canceled = true;
@@ -84,11 +106,20 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
     };
   }, [query]);
 
-  function pick(hit: SearchHit) {
-    onOpenArticle(hit.title);
+  function pick(title: string) {
+    onOpenArticle(title);
     setOpen(false);
     setQuery("");
   }
+
+  // Drop semantic hits whose title already appears in the lexical results
+  // — no point showing the same article twice. Comparison is
+  // case-insensitive since lexical hits come back with the canonical
+  // article title and embeddings were stored against that same title.
+  const lexicalTitles = new Set(hits.map((h) => h.title.toLowerCase()));
+  const dedupedSemantic = semanticHits.filter(
+    (s) => !lexicalTitles.has(s.title.toLowerCase()),
+  );
 
   return (
     <div ref={containerRef} className="relative w-72 max-w-full">
@@ -149,12 +180,12 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
             <ul className="divide-y divide-tome-border">
               {hits.map((h) => (
                 <li
-                  key={h.page_id}
+                  key={`lex-${h.page_id}`}
                   onMouseDown={(e) => {
                     // mousedown so the input doesn't lose focus first and
                     // dismiss the overlay before pick() runs.
                     e.preventDefault();
-                    pick(h);
+                    pick(h.title);
                   }}
                   className="p-3 hover:bg-tome-surface-2 cursor-pointer"
                 >
@@ -170,6 +201,36 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
                 </li>
               ))}
             </ul>
+          )}
+
+          {!error && dedupedSemantic.length > 0 && (
+            <>
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-tome-muted bg-tome-surface-2 border-y border-tome-border">
+                Related by meaning
+              </div>
+              <ul className="divide-y divide-tome-border">
+                {dedupedSemantic.map((s) => (
+                  <li
+                    key={`sem-${s.page_id}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      pick(s.title);
+                    }}
+                    className="p-3 hover:bg-tome-surface-2 cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm">{s.title}</span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
+                        ai
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-tome-muted mt-0.5">
+                      similarity {s.score.toFixed(2)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       )}
