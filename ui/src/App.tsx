@@ -7,7 +7,10 @@ import Browse from "./panes/Browse";
 import MapPane from "./panes/Map";
 import Settings from "./panes/Settings";
 import { PresetPicker, ThemeToggle, useTheme } from "./components/Theme";
+import FirstRunWizard from "./components/FirstRunWizard";
 import SearchBar from "./components/SearchBar";
+import { tome } from "./service";
+import { isTauri } from "./types";
 
 type Pane = "library" | "reader" | "browse" | "map" | "archive" | "settings";
 
@@ -23,11 +26,40 @@ const PANE_LABEL: Record<Pane, string> = {
 export default function App() {
   const [pane, setPane] = useState<Pane>("library");
   const [activeTitle, setActiveTitle] = useState<string | null>(null);
+  // Wizard visibility: undefined while we're checking, true/false after.
+  // Avoids a flash of the empty Library before the wizard mounts.
+  const [showWizard, setShowWizard] = useState<boolean | undefined>(undefined);
   useTheme(); // attaches dark-mode class + data-preset to <html>
 
   useEffect(() => {
     if (activeTitle) setPane("reader");
   }, [activeTitle]);
+
+  useEffect(() => {
+    // First-run heuristic: outside Tauri we never show the wizard (browser
+    // dev mode). Inside Tauri, show it when the user has neither configured
+    // a dump nor ingested any articles.
+    if (!isTauri()) {
+      setShowWizard(false);
+      return;
+    }
+    (async () => {
+      try {
+        const [dump, counts] = await Promise.all([
+          tome.dumpPath(),
+          tome.tierCounts(),
+        ]);
+        const empty =
+          counts.hot + counts.warm + counts.cold + counts.evicted === 0;
+        setShowWizard(!dump && empty);
+      } catch {
+        // If anything fails we err on the side of NOT showing the wizard,
+        // so an existing user with a transient backend hiccup isn't trapped
+        // behind a setup screen.
+        setShowWizard(false);
+      }
+    })();
+  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -77,6 +109,16 @@ export default function App() {
       </main>
 
       <StatusBar />
+
+      {showWizard && (
+        <FirstRunWizard
+          onComplete={() => {
+            setShowWizard(false);
+            setPane("library");
+          }}
+          onSkip={() => setShowWizard(false)}
+        />
+      )}
     </div>
   );
 }
