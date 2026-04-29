@@ -18,12 +18,19 @@ tome-search = { workspace = true }
 tome-wikitext = { workspace = true }
 tome-modules = { workspace = true }
 tome-archive = { workspace = true }
+tome-ai = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 flate2 = { workspace = true }
+
+[features]
+default = []
+# Forwards to tome-ai's feature; the Tauri shell enables this on its
+# tome-services dependency line so the binary build pulls in fastembed.
+semantic-search = ["tome-ai/semantic-search"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -200,21 +200,16 @@ export default function Settings() {
         </div>
       </Section>
 
-      <Section title="AI features (experimental)">
-        <Row label="Master switch">
-          <DisabledToggle label="off" />
-        </Row>
-        <Row label="Semantic search">
-          <DisabledToggle label="not built" />
-        </Row>
-        <Row label="Ask Tome (RAG)">
+      <SemanticSearchSection />
+
+      <Section title="Ask Tome (RAG)">
+        <Row label="Status">
           <DisabledToggle label="not built" />
         </Row>
         <div className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400 border-t border-zinc-200 dark:border-zinc-800">
-          Optional, opt-in, local-only. When enabled, downloads a small
-          embedding model (~150 MB) for concept search and/or a quantized
-          LLM (~2 GB) that answers with citations back to source articles.
-          Both off by default; nothing runs until you turn it on.
+          A future commit. Will add a chat surface that asks the local LLM
+          to answer with citations back to source articles. Tracked at
+          docs/research/local-llm-landscape.md.
         </div>
       </Section>
     </section>
@@ -906,5 +901,83 @@ function MapSourceSection() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SemanticSearchSection() {
+  const [count, setCount] = useState<number | null>(null);
+  const [phase, setPhase] = useState<"idle" | "embedding" | "done" | "error">(
+    "idle",
+  );
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .countEmbeddings()
+      .then(setCount)
+      .catch(() => setCount(null));
+  }, []);
+
+  async function handleEmbed() {
+    if (!isTauri()) return;
+    setPhase("embedding");
+    setProgress(0);
+    setError(null);
+    try {
+      // 0 means "embed everything pending" — the loop terminates when the
+      // articles_without_embedding query returns an empty page.
+      await tome.embedArticles(0, (n) => setProgress(n));
+      setPhase("done");
+      const updated = await tome.countEmbeddings();
+      setCount(updated);
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <Section title="Semantic search (AI)">
+      <Row label="Articles embedded">
+        <span className="text-sm font-mono">
+          {count?.toLocaleString() ?? "—"}
+        </span>
+      </Row>
+      <Row label="">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleEmbed}
+            disabled={phase === "embedding" || !isTauri()}
+            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            {phase === "embedding"
+              ? `Embedding… ${progress.toLocaleString()}`
+              : count && count > 0
+                ? "Embed remaining"
+                : "Build index"}
+          </button>
+          {phase === "done" && (
+            <span className="text-xs text-tome-success">
+              ✓ done · {count?.toLocaleString()} total
+            </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
+          )}
+        </div>
+      </Row>
+      <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+        Embeds article titles using BGE-small-en-v1.5 (~33 MB, downloads
+        on first run from HuggingFace). Once built, semantic search finds
+        articles by meaning — typing &quot;tools to navigate offline&quot;
+        will surface compass and map articles even when those words don&apos;t
+        appear in the title. Resumable — interrupting and re-running picks
+        up where it left off.
+      </div>
+    </Section>
   );
 }

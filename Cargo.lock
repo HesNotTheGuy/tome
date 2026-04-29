@@ -6158,6 +6158,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tome-ai",
  "tome-api",
  "tome-archive",
  "tome-config",

@@ -22,12 +22,12 @@ use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{
-    ArticleResponse, CategoryIngestSummary, GeotagSummary, IngestSummary, RedirectIngestSummary,
-    TierCounts, Tome,
+    ArticleResponse, CategoryIngestSummary, EmbeddingIngestSummary, GeotagSummary, IngestSummary,
+    RedirectIngestSummary, TierCounts, Tome,
 };
 use tome_storage::{
-    ArticleStore, CategoryMember, CategoryMemberKind, Geotag, MappedGeotag, RelatedArticle,
-    SqliteArticleStore,
+    ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag, MappedGeotag,
+    RelatedArticle, SqliteArticleStore,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -87,6 +87,9 @@ pub fn run() {
             last_index_path,
             map_source_path,
             set_map_source_path,
+            embed_articles,
+            count_embeddings,
+            semantic_search,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -326,6 +329,44 @@ fn map_source_path(state: State<'_, Arc<Tome>>) -> Option<String> {
 fn set_map_source_path(path: Option<String>, state: State<'_, Arc<Tome>>) -> Result<(), String> {
     let pb = path.map(PathBuf::from);
     state.set_map_source_path(pb).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn embed_articles(
+    max_articles: u64,
+    app: AppHandle,
+    state: State<'_, Arc<Tome>>,
+) -> Result<EmbeddingIngestSummary, String> {
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        tome.embed_articles(max_articles, |count| {
+            let _ = app.emit("ai:embedding_progress", count);
+        })
+    })
+    .await
+    .map_err(|e| format!("embedding task join: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn count_embeddings(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_embeddings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn semantic_search(
+    query: String,
+    k: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<EmbeddingHit>, String> {
+    let tome = state.inner().clone();
+    // Off the runtime: the embed_one call hits the model, the cosine scan
+    // walks every stored vector. Both are CPU-bound; spawn_blocking keeps
+    // the IPC reactor responsive.
+    tokio::task::spawn_blocking(move || tome.semantic_search(&query, k))
+        .await
+        .map_err(|e| format!("semantic search task join: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

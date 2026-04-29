@@ -1,10 +1,11 @@
 //! The `Tome` facade — the only public surface the UI depends on.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use tome_ai::embedding::{DefaultEmbedder, Embedder};
 use tome_api::{MediaWikiClient, Revision};
 use tome_archive::ArchiveStore;
 use tome_config::Settings;
@@ -13,8 +14,8 @@ use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_storage::{
-    ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, Geotag,
-    MappedGeotag, Redirect, RelatedArticle,
+    ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, EmbeddingHit,
+    Geotag, MappedGeotag, Redirect, RelatedArticle,
 };
 use tome_wikitext::Renderer;
 
@@ -43,6 +44,15 @@ pub struct ArticleResponse {
     pub revision_id: Option<u64>,
 }
 
+/// Identifier under which our embeddings are namespaced in storage.
+/// Bumping this string forces a full re-embed on the next ingest run; old
+/// rows linger but are ignored by `semantic_search`.
+pub const EMBEDDING_MODEL_ID: &str = "bge-small-en-v1.5";
+
+/// How many articles to embed per call to [`Embedder::embed_batch`]. Tuned
+/// to amortize per-call overhead without holding too much in RAM at once.
+const EMBED_BATCH_SIZE: usize = 64;
+
 pub struct Tome {
     storage: Arc<dyn ArticleStore>,
     archive: Arc<ArchiveStore>,
@@ -60,6 +70,10 @@ pub struct Tome {
     /// Whether to attempt API-cached Parsoid HTML for Cold reads. When
     /// false (or when the API call fails), we render locally from the dump.
     prefer_api_for_cold: bool,
+    /// Lazy-initialized text embedder. First touch from the user (Embed
+    /// articles button or Semantic search) downloads the ~33 MB model into
+    /// `<data_dir>/ai/models/`. Subsequent calls are zero-cost.
+    embedder: OnceLock<Arc<dyn Embedder>>,
 }
 
 impl Tome {
@@ -81,7 +95,23 @@ impl Tome {
             dump_path: Arc::new(RwLock::new(settings.dump_path)),
             data_dir,
             prefer_api_for_cold: true,
+            embedder: OnceLock::new(),
         }
+    }
+
+    /// Get-or-init the embedder. Blocking on first call (model download +
+    /// load); zero-cost thereafter. Errors propagate up so the UI can render
+    /// "AI unavailable" rather than crash. Stub implementation when the
+    /// `semantic-search` feature is disabled returns a clear error.
+    fn embedder(&self) -> Result<Arc<dyn Embedder>> {
+        if let Some(e) = self.embedder.get() {
+            return Ok(e.clone());
+        }
+        let cache_dir = self.data_dir.join("ai").join("models");
+        let new_embedder: Arc<dyn Embedder> = Arc::new(DefaultEmbedder::new(cache_dir)?);
+        // Race-safe: get_or_init returns the winner if another thread raced us.
+        let stored = self.embedder.get_or_init(|| new_embedder.clone());
+        Ok(stored.clone())
     }
 
     pub fn with_prefer_api_for_cold(mut self, prefer: bool) -> Self {
@@ -675,11 +705,113 @@ impl Tome {
     pub fn count_redirects(&self) -> Result<u64> {
         self.storage.count_redirects()
     }
+
+    // --- Semantic search (AI) ------------------------------------------------
+
+    /// Number of articles with an embedding under the current model.
+    pub fn count_embeddings(&self) -> Result<u64> {
+        self.storage.count_embeddings(EMBEDDING_MODEL_ID)
+    }
+
+    /// Embed articles that don't yet have a vector under [`EMBEDDING_MODEL_ID`].
+    ///
+    /// Walks the corpus in `articles_without_embedding` chunks, batches each
+    /// chunk through the embedder, persists. Resumable: a crashed run can be
+    /// re-invoked and will pick up exactly where it left off because
+    /// `articles_without_embedding` filters on the join with
+    /// `article_embeddings`.
+    ///
+    /// `max_articles = 0` means "embed everything pending." A non-zero limit
+    /// caps the work done in one call so the UI can give the user a
+    /// progress bar with a definite end.
+    ///
+    /// Embeds the **title** only — fast (~1000/sec on CPU) and good enough
+    /// to beat keyword search for query intent. A future "deepen index"
+    /// feature can re-embed with title + lede for higher quality at the
+    /// cost of dump I/O per article.
+    pub fn embed_articles<F>(
+        &self,
+        max_articles: u64,
+        mut on_progress: F,
+    ) -> Result<EmbeddingIngestSummary>
+    where
+        F: FnMut(u64),
+    {
+        let started = Instant::now();
+        let embedder = self.embedder()?;
+
+        let mut total = 0_u64;
+        loop {
+            // Decide how many to fetch this round, respecting max_articles.
+            let want = if max_articles == 0 {
+                EMBED_BATCH_SIZE as u32
+            } else {
+                let remaining = max_articles.saturating_sub(total);
+                if remaining == 0 {
+                    break;
+                }
+                remaining.min(EMBED_BATCH_SIZE as u64) as u32
+            };
+
+            let pending = self
+                .storage
+                .articles_without_embedding(EMBEDDING_MODEL_ID, want)?;
+            if pending.is_empty() {
+                break; // nothing left to embed
+            }
+
+            let texts: Vec<String> = pending.iter().map(|(_, t)| t.clone()).collect();
+            let vectors = embedder.embed_batch(&texts)?;
+            if vectors.len() != pending.len() {
+                return Err(TomeError::Other(format!(
+                    "embedder returned {} vectors for {} inputs",
+                    vectors.len(),
+                    pending.len()
+                )));
+            }
+
+            let batch: Vec<(u64, Vec<f32>, &str)> = pending
+                .iter()
+                .zip(vectors)
+                .map(|((id, _), v)| (*id, v, EMBEDDING_MODEL_ID))
+                .collect();
+            self.storage.batch_upsert_embeddings(&batch)?;
+
+            total += pending.len() as u64;
+            on_progress(total);
+        }
+
+        Ok(EmbeddingIngestSummary {
+            articles_embedded: total,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// Top-K articles whose embedding is closest to the query, by cosine
+    /// similarity. Empty query short-circuits to no results.
+    ///
+    /// Errors from the embedder (model not yet downloaded, feature
+    /// disabled) propagate up so the UI can show "Semantic search not
+    /// ready" rather than failing the whole search call.
+    pub fn semantic_search(&self, query: &str, k: u32) -> Result<Vec<EmbeddingHit>> {
+        if query.trim().is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let embedder = self.embedder()?;
+        let q_vec = embedder.embed_one(query)?;
+        self.storage.top_k_by_cosine(EMBEDDING_MODEL_ID, &q_vec, k)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedirectIngestSummary {
     pub entries_processed: u64,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingIngestSummary {
+    pub articles_embedded: u64,
     pub elapsed_ms: u64,
 }
 

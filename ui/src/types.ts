@@ -96,6 +96,18 @@ export interface MappedGeotag {
   kind: string | null;
 }
 
+export interface EmbeddingHit {
+  page_id: number;
+  title: string;
+  /** Cosine similarity in [-1, 1]; higher is more similar. */
+  score: number;
+}
+
+export interface EmbeddingIngestSummary {
+  articles_embedded: number;
+  elapsed_ms: number;
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

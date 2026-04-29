@@ -22,6 +22,6 @@ pub mod tome;
 
 pub use link_resolver::StorageLinkResolver;
 pub use tome::{
-    ArticleResponse, ArticleSource, CategoryIngestSummary, GeotagSummary, IngestSummary,
-    RedirectIngestSummary, TierCounts, Tome,
+    ArticleResponse, ArticleSource, CategoryIngestSummary, EMBEDDING_MODEL_ID,
+    EmbeddingIngestSummary, GeotagSummary, IngestSummary, RedirectIngestSummary, TierCounts, Tome,
 };

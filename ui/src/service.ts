@@ -12,6 +12,8 @@ import {
   CategoryIngestSummary,
   CategoryMember,
   CategoryMemberKind,
+  EmbeddingHit,
+  EmbeddingIngestSummary,
   Geotag,
   GeotagSummary,
   IngestSummary,
@@ -64,6 +66,12 @@ export interface TomeService {
   lastIndexPath(): Promise<string | null>;
   mapSourcePath(): Promise<string | null>;
   setMapSourcePath(path: string | null): Promise<void>;
+  embedArticles(
+    maxArticles: number,
+    onProgress: (count: number) => void,
+  ): Promise<EmbeddingIngestSummary>;
+  countEmbeddings(): Promise<number>;
+  semanticSearch(query: string, k: number): Promise<EmbeddingHit[]>;
   ingestGeotags(
     path: string,
     onProgress: (count: number) => void,
@@ -161,6 +169,26 @@ export const tome: TomeService = {
   },
   setMapSourcePath(path) {
     return invoke<void>("set_map_source_path", { path });
+  },
+  async embedArticles(maxArticles, onProgress) {
+    const eventMod = await import("@tauri-apps/api/event");
+    const unlisten = await eventMod.listen<number>(
+      "ai:embedding_progress",
+      (e) => onProgress(e.payload),
+    );
+    try {
+      return await invoke<EmbeddingIngestSummary>("embed_articles", {
+        maxArticles,
+      });
+    } finally {
+      unlisten();
+    }
+  },
+  countEmbeddings() {
+    return invoke<number>("count_embeddings");
+  },
+  semanticSearch(query, k) {
+    return invoke<EmbeddingHit[]>("semantic_search", { query, k });
   },
   countGeotags() {
     return invoke<number>("count_geotags");
