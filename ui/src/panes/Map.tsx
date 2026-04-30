@@ -19,14 +19,18 @@ interface MapProps {
 /**
  * World map of every primary-geotagged article we've indexed.
  *
- * - **Renderer:** MapLibre GL (vector + raster).
- * - **Basemap source:** if the user has configured a `.pmtiles` archive in
- *   Settings, the map streams tiles from it via the `tome-pmtiles://` URI
- *   scheme — fully offline, byte-range fetched from disk. Otherwise it falls
- *   back to live OSM raster tiles.
+ * - **Renderer:** MapLibre GL.
+ * - **Basemap source:** strictly offline. If the user has configured a
+ *   `.pmtiles` archive in Settings, the map streams tiles from it via the
+ *   `tome-pmtiles://` URI scheme. Otherwise the basemap is empty (just a
+ *   plain themed background) and we surface a banner pointing at the
+ *   Settings → Offline map source row.
+ *   We deliberately don't fall back to a live tile provider — Tome is
+ *   offline-first, and using public OSM tiles in shipped builds violates
+ *   the OSM Tile Usage Policy at any meaningful scale.
  * - **Pin layer:** a single GeoJSON source feeding three styled layers —
  *   clusters, cluster counts, and individual points. MapLibre handles the
- *   clustering natively, so no separate supercluster index needed.
+ *   clustering natively, no separate supercluster index needed.
  *
  * Click handling: clusters zoom in; points open their article in the Reader.
  */
@@ -38,7 +42,7 @@ export default function MapPane({ onOpen }: MapProps) {
   );
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [usingOffline, setUsingOffline] = useState(false);
+  const [hasBasemap, setHasBasemap] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -50,26 +54,24 @@ export default function MapPane({ onOpen }: MapProps) {
       const protocol = new pmtiles.Protocol();
       maplibregl.addProtocol("pmtiles", protocol.tile);
 
-      // Decide the basemap style based on whether a pmtiles file is configured.
+      // Decide the style based on whether a pmtiles file is configured.
+      // No fallback to a live provider — pins-on-empty-canvas is the
+      // intentional state when no offline source is set.
       let style: StyleSpecification;
-      let offline = false;
+      let configured = false;
       try {
         if (isTauri()) {
           const path = await tome.mapSourcePath();
           if (path) {
-            offline = true;
+            configured = true;
           }
         }
       } catch {
-        /* fall through to OSM */
+        // Ignore — treat as no basemap.
       }
-      if (offline) {
-        style = pmtilesStyle();
-      } else {
-        style = osmStyle();
-      }
+      style = configured ? pmtilesStyle() : emptyStyle();
       if (cancelled) return;
-      setUsingOffline(offline);
+      setHasBasemap(configured);
 
       const map = new maplibregl.Map({
         container: containerRef.current!,
@@ -243,9 +245,11 @@ export default function MapPane({ onOpen }: MapProps) {
               <>
                 {count.toLocaleString()} articles
                 {" · "}
-                <span className={usingOffline ? "text-tome-success" : ""}>
-                  {usingOffline ? "offline basemap" : "online basemap"}
-                </span>
+                {hasBasemap ? (
+                  <span className="text-tome-success">offline basemap</span>
+                ) : (
+                  <span>pins only</span>
+                )}
               </>
             )}
             {phase === "empty" && "no geotags ingested yet"}
@@ -269,25 +273,50 @@ export default function MapPane({ onOpen }: MapProps) {
         </div>
       )}
 
+      {phase === "ready" && !hasBasemap && (
+        <div className="p-3 mx-4 mt-4 rounded border border-tome-border bg-tome-surface-2 text-xs text-tome-muted">
+          No basemap configured — pins are rendered against an empty canvas.
+          Add an offline <code>.pmtiles</code> file in{" "}
+          <strong>Settings → Offline map source</strong> for a real basemap.
+          Free regional and worldwide downloads at{" "}
+          <a
+            href="https://maps.protomaps.com/builds/"
+            className="underline text-tome-link"
+          >
+            maps.protomaps.com/builds/
+          </a>
+          .
+        </div>
+      )}
+
       <div ref={containerRef} className="flex-1 min-h-0 tome-map" />
     </section>
   );
 }
 
-/** Live OpenStreetMap raster basemap. Needs network. */
-function osmStyle(): StyleSpecification {
+/**
+ * Empty style — no tiles. Used when no offline basemap is configured.
+ * MapLibre still renders our pin layers on top of a plain themed
+ * background. This is intentional: Tome is offline-first and we
+ * deliberately don't fall back to a live tile provider for legal /
+ * etiquette reasons (OSM's Tile Usage Policy prohibits production use,
+ * and we don't want to ship secret API keys to commercial providers).
+ */
+function emptyStyle(): StyleSpecification {
   return {
     version: 8,
-    sources: {
-      osm: {
-        type: "raster",
-        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    sources: {},
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: {
+          // Themed muted background — picks up surface-2 on light mode
+          // and a slightly lighter slate on dark.
+          "background-color": "#1e293b",
+        },
       },
-    },
-    layers: [{ id: "osm", type: "raster", source: "osm" }],
+    ],
   };
 }
 
