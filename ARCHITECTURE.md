@@ -23,10 +23,10 @@
           │   ┌──────────────┼────────────────┘                │
           │   │              │                                 │
           ▼   ▼              ▼                                 │
-   ┌──────────────┐   ┌──────────────┐  ┌──────────────┐       │
-   │  tome-search │   │tome-wikitext │  │ tome-archive │       │
-   │              │   │              │  │              │       │
-   └──────────────┘   └──────────────┘  └──────────────┘       │
+   ┌──────────────┐   ┌──────────────┐                         │
+   │  tome-search │   │tome-wikitext │                         │
+   │              │   │              │                         │
+   └──────────────┘   └──────────────┘                         │
                                                                │
    ┌──────────────────────────────────────────────────────────┘
    ▼
@@ -36,7 +36,7 @@
 **Rules of the dep graph:**
 - The UI talks to `tome-services` and nothing else.
 - `tome-services` may depend on every other crate.
-- Domain crates (`tome-dump`, `tome-storage`, `tome-api`, `tome-search`, `tome-wikitext`, `tome-modules`, `tome-archive`) depend only on `tome-core`, `tome-config`, and where strictly necessary on each other (documented per crate).
+- Domain crates (`tome-dump`, `tome-storage`, `tome-api`, `tome-search`, `tome-wikitext`, `tome-modules`) depend only on `tome-core`, `tome-config`, and where strictly necessary on each other (documented per crate). Saved-revision archival lives in `tome-storage`'s `archive` submodule alongside the article store.
 - `tome-core` and `tome-config` depend on nothing in this workspace except possibly each other.
 - No cycles. Cargo enforces this at compile time.
 
@@ -80,8 +80,8 @@
 - Uninstall: move articles to Cold or Evicted per user choice.
 - Import/export to a portable file format (TOML).
 
-### Revision archive (`tome-archive`)
-- Separate SQLite database for permanently-saved revisions with optional user notes.
+### Revision archive (`tome-storage::archive`)
+- Separate SQLite database (alongside the article store, in the same crate) for permanently-saved revisions with optional user notes.
 - Independent of the tier system; saved revisions are full content and survive dump replacement.
 - Diffs computed via `action=compare` through the API client.
 - Local FTS5 index for searching within saved revisions.
@@ -171,5 +171,5 @@ services.install_module(spec):
 | `tome-search` | Unit + integration with small fixture corpus | ~50 articles |
 | `tome-wikitext` | Snapshot tests against ~50 hand-picked articles | Featured / stub / disambig / list / heavy-template variants |
 | `tome-modules` | Unit with mocked API client | Category tree resolution, install/uninstall flows |
-| `tome-archive` | Unit | tempfile-backed SQLite |
+| `tome-storage` (archive submodule) | Unit | tempfile-backed SQLite |
 | `tome-services` | Integration: dump → install → search → save → refresh | The flow listed in the spec |

@@ -13,6 +13,7 @@
 //! All schema migrations and the per-article compression policy live here so
 //! the rest of the app does not need to know about them.
 
+pub mod archive;
 pub mod article;
 pub mod category;
 pub mod compression;
@@ -21,6 +22,7 @@ pub mod redirect;
 pub mod schema;
 pub mod store;
 
+pub use archive::{ArchiveStore, SavedRevision, SavedRevisionMeta};
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;

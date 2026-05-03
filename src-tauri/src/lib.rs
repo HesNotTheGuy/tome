@@ -17,7 +17,6 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport, Revision};
-use tome_archive::{ArchiveStore, SavedRevisionMeta};
 use tome_core::{SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
@@ -26,8 +25,8 @@ use tome_services::{
     IngestSummary, RedirectIngestSummary, TierCounts, Tome,
 };
 use tome_storage::{
-    ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag, MappedGeotag,
-    RelatedArticle, SqliteArticleStore,
+    ArchiveStore, ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag,
+    MappedGeotag, RelatedArticle, SavedRevisionMeta, SqliteArticleStore,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

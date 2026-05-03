@@ -30,11 +30,10 @@ use tempfile::NamedTempFile;
 
 use tome_api::testing::MockTransport;
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient};
-use tome_archive::ArchiveStore;
 use tome_modules::ModuleStore;
 use tome_search::Index as SearchIndex;
 use tome_services::{Tome, category_ingest, geotag_ingest, redirect_ingest};
-use tome_storage::{ArticleStore, SqliteArticleStore};
+use tome_storage::{ArchiveStore, ArticleStore, SqliteArticleStore};
 
 /// Run `op` against `path` and assert that the file's bytes are unchanged.
 ///

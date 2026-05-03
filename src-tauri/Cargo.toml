@@ -33,7 +33,6 @@ tome-storage = { workspace = true }
 tome-api = { workspace = true }
 tome-search = { workspace = true }
 tome-modules = { workspace = true }
-tome-archive = { workspace = true }
 tome-dump = { workspace = true }
 tome-wikitext = { workspace = true }
 

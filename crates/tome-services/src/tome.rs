@@ -9,15 +9,14 @@ use tome_ai::chat::{ChatAnswer, ChatConfig, ChatContext, ChatEngine, LlamaChatEn
 use tome_ai::chat_download;
 use tome_ai::embedding::{DefaultEmbedder, Embedder};
 use tome_api::{MediaWikiClient, Revision};
-use tome_archive::ArchiveStore;
 use tome_config::Settings;
 use tome_core::{Result, SearchHit, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_storage::{
-    ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind, EmbeddingHit,
-    Geotag, MappedGeotag, Redirect, RelatedArticle,
+    ArchiveStore, ArticleContent, ArticleStore, CategoryLink, CategoryMember, CategoryMemberKind,
+    EmbeddingHit, Geotag, MappedGeotag, Redirect, RelatedArticle,
 };
 use tome_wikitext::Renderer;
 
@@ -371,7 +370,7 @@ impl Tome {
             .save(title, revision_id, wikitext, html, user_note)
     }
 
-    pub fn list_archive(&self) -> Result<Vec<tome_archive::SavedRevisionMeta>> {
+    pub fn list_archive(&self) -> Result<Vec<tome_storage::SavedRevisionMeta>> {
         self.archive.list()
     }
 
@@ -379,7 +378,7 @@ impl Tome {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<tome_archive::SavedRevisionMeta>> {
+    ) -> Result<Vec<tome_storage::SavedRevisionMeta>> {
         if query.is_empty() {
             return Ok(Vec::new());
         }

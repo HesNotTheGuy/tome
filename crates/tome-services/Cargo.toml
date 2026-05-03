@@ -17,7 +17,6 @@ tome-api = { workspace = true }
 tome-search = { workspace = true }
 tome-wikitext = { workspace = true }
 tome-modules = { workspace = true }
-tome-archive = { workspace = true }
 tome-ai = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

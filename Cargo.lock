@@ -6184,7 +6184,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tome-api",
- "tome-archive",
  "tome-config",
  "tome-core",
  "tome-dump",
@@ -6195,18 +6194,6 @@ dependencies = [
  "tome-wikitext",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "tome-archive"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "serde",
- "tempfile",
- "tome-config",
- "tome-core",
- "tracing",
 ]
 
 [[package]]
@@ -6283,7 +6270,6 @@ dependencies = [
  "tokio",
  "tome-ai",
  "tome-api",
- "tome-archive",
  "tome-config",
  "tome-core",
  "tome-dump",

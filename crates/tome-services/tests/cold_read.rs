@@ -12,14 +12,13 @@ use std::sync::Arc;
 use tempfile::{NamedTempFile, TempDir};
 use tome_api::testing::{MockResponse, MockTransport};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient};
-use tome_archive::ArchiveStore;
 use tome_config::Settings;
 use tome_core::{Tier, Title};
 use tome_dump::fixture::{PageData, build_fixture};
 use tome_modules::ModuleStore;
 use tome_search::Index as SearchIndex;
 use tome_services::{ArticleSource, Tome};
-use tome_storage::{ArticleMetadata, ArticleStore, SqliteArticleStore};
+use tome_storage::{ArchiveStore, ArticleMetadata, ArticleStore, SqliteArticleStore};
 
 fn pages_for_test() -> Vec<PageData> {
     vec![

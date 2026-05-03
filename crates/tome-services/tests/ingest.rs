@@ -12,14 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{NamedTempFile, TempDir};
 use tome_api::testing::MockTransport;
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient};
-use tome_archive::ArchiveStore;
 use tome_config::Settings;
 use tome_core::Title;
 use tome_dump::fixture::{PageData, build_fixture};
 use tome_modules::ModuleStore;
 use tome_search::Index as SearchIndex;
 use tome_services::Tome;
-use tome_storage::{ArticleStore, SqliteArticleStore};
+use tome_storage::{ArchiveStore, ArticleStore, SqliteArticleStore};
 
 fn pages() -> Vec<PageData> {
     (1..=50)
