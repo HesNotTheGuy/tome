@@ -10,7 +10,6 @@ description = "Full-text search index over the Wikipedia corpus."
 
 [dependencies]
 tome-core = { workspace = true }
-tome-config = { workspace = true }
 tantivy = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

@@ -107,7 +107,7 @@ Tome's MediaWiki API client enforces a 10 req/s ceiling, exponential backoff wit
 
 ## Forking
 
-If you fork Tome and ship a modified build, **change the `User-Agent` string** so MediaWiki and abuse reporters can identify your fork as the source of its traffic. The constant lives at [`crates/tome-config/src/lib.rs`](crates/tome-config/src/lib.rs) — `DEFAULT_USER_AGENT`. Use the format MediaWiki documents:
+If you fork Tome and ship a modified build, **change the `User-Agent` string** so MediaWiki and abuse reporters can identify your fork as the source of its traffic. The constant lives at [`crates/tome-core/src/config.rs`](crates/tome-core/src/config.rs) — `DEFAULT_USER_AGENT`. Use the format MediaWiki documents:
 
 ```
 <your-fork-name>/<version> (+<your-contact-url>)

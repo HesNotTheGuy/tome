@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/tome-core",
-    "crates/tome-config",
     "crates/tome-dump",
     "crates/tome-storage",
     "crates/tome-api",
@@ -74,7 +73,6 @@ toml = "0.8"
 
 # Internal crates (resolved by workspace)
 tome-core    = { path = "crates/tome-core" }
-tome-config  = { path = "crates/tome-config" }
 tome-dump    = { path = "crates/tome-dump" }
 tome-storage = { path = "crates/tome-storage" }
 tome-api     = { path = "crates/tome-api" }

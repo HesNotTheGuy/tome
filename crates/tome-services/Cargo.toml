@@ -10,7 +10,6 @@ description = "Thin orchestration layer; the only thing the UI talks to."
 
 [dependencies]
 tome-core = { workspace = true }
-tome-config = { workspace = true }
 tome-dump = { workspace = true }
 tome-storage = { workspace = true }
 tome-api = { workspace = true }

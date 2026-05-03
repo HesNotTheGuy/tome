@@ -10,7 +10,6 @@ description = "Tiered article storage (Hot / Warm / Cold / Evicted) for Tome."
 
 [dependencies]
 tome-core = { workspace = true }
-tome-config = { workspace = true }
 rusqlite = { workspace = true }
 zstd = { workspace = true }
 flate2 = { workspace = true }

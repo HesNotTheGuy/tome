@@ -10,7 +10,6 @@ description = "Optional local-AI features for Tome: semantic search and RAG over
 
 [dependencies]
 tome-core = { workspace = true }
-tome-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

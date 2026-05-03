@@ -9,8 +9,7 @@ use tome_ai::chat::{ChatAnswer, ChatConfig, ChatContext, ChatEngine, LlamaChatEn
 use tome_ai::chat_download;
 use tome_ai::embedding::{DefaultEmbedder, Embedder};
 use tome_api::{MediaWikiClient, Revision};
-use tome_config::Settings;
-use tome_core::{Result, SearchHit, Tier, Title, TomeError};
+use tome_core::{Result, SearchHit, Settings, Tier, Title, TomeError};
 use tome_dump::{DumpReader, IndexReader, parse_pages};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
@@ -429,7 +428,7 @@ impl Tome {
     }
 
     pub fn user_agent(&self) -> &str {
-        tome_config::DEFAULT_USER_AGENT
+        tome_core::DEFAULT_USER_AGENT
     }
 
     /// Current dump file path (if configured).

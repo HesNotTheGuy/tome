@@ -30,14 +30,14 @@
                                                                │
    ┌──────────────────────────────────────────────────────────┘
    ▼
-   shared base: tome-core (errors, types) + tome-config (paths, defaults)
+   shared base: tome-core (errors, types, config — paths, defaults)
 ```
 
 **Rules of the dep graph:**
 - The UI talks to `tome-services` and nothing else.
 - `tome-services` may depend on every other crate.
-- Domain crates (`tome-dump`, `tome-storage`, `tome-api`, `tome-search`, `tome-wikitext`, `tome-modules`) depend only on `tome-core`, `tome-config`, and where strictly necessary on each other (documented per crate). Saved-revision archival lives in `tome-storage`'s `archive` submodule alongside the article store.
-- `tome-core` and `tome-config` depend on nothing in this workspace except possibly each other.
+- Domain crates (`tome-dump`, `tome-storage`, `tome-api`, `tome-search`, `tome-wikitext`, `tome-modules`) depend only on `tome-core` and where strictly necessary on each other (documented per crate). Saved-revision archival lives in `tome-storage`'s `archive` submodule alongside the article store.
+- `tome-core` depends on nothing in this workspace. Its `config` submodule holds paths, URLs, and defaults that were previously in a separate `tome-config` crate (merged in: config types are core types).
 - No cycles. Cargo enforces this at compile time.
 
 ## Layer responsibilities
@@ -158,7 +158,7 @@ services.install_module(spec):
 ## Runtime conventions
 
 - All paths derived at runtime from `dirs::data_dir().join("Tome")`. No hardcoded user paths in source.
-- `User-Agent` loaded from `tome-config::Config::user_agent`; default is the standard `Tome/1.0 (+https://github.com/HesNotTheGuy/tome)` string.
+- `User-Agent` loaded from `tome_core::Config::user_agent`; default is the standard `Tome/1.0 (+https://github.com/HesNotTheGuy/tome)` string.
 - Logging uses a redaction layer that strips user-entered text (notes, full article bodies) before emit so log files stay safe to share for debugging.
 
 ## Testing strategy

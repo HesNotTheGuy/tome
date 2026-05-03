@@ -6148,7 +6148,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tome-config",
  "tome-core",
  "tracing",
 ]
@@ -6164,7 +6163,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tome-config",
  "tome-core",
  "tracing",
  "url",
@@ -6184,7 +6182,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tome-api",
- "tome-config",
  "tome-core",
  "tome-dump",
  "tome-modules",
@@ -6197,23 +6194,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "tome-config"
-version = "0.1.0"
-dependencies = [
- "dirs 5.0.1",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tome-core",
-]
-
-[[package]]
 name = "tome-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "dirs 5.0.1",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -6240,7 +6228,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tome-config",
  "tome-core",
  "toml 0.8.2",
  "tracing",
@@ -6253,7 +6240,6 @@ dependencies = [
  "serde",
  "tantivy",
  "tempfile",
- "tome-config",
  "tome-core",
  "tracing",
 ]
@@ -6270,7 +6256,6 @@ dependencies = [
  "tokio",
  "tome-ai",
  "tome-api",
- "tome-config",
  "tome-core",
  "tome-dump",
  "tome-modules",
@@ -6288,7 +6273,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "tempfile",
- "tome-config",
  "tome-core",
  "tracing",
  "zstd",

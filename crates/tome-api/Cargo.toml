@@ -10,7 +10,6 @@ description = "MediaWiki API client. Sole gatekeeper for outbound traffic."
 
 [dependencies]
 tome-core = { workspace = true }
-tome-config = { workspace = true }
 reqwest = { workspace = true }
 governor = { workspace = true }
 tokio = { workspace = true }

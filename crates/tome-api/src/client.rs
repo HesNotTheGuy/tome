@@ -29,9 +29,9 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            base_url: tome_config::WIKIPEDIA_REST_HTML_BASE.to_string(),
-            user_agent: tome_config::DEFAULT_USER_AGENT.to_string(),
-            requests_per_second: tome_config::MAX_REQUESTS_PER_SECOND,
+            base_url: tome_core::WIKIPEDIA_REST_HTML_BASE.to_string(),
+            user_agent: tome_core::DEFAULT_USER_AGENT.to_string(),
+            requests_per_second: tome_core::MAX_REQUESTS_PER_SECOND,
             max_attempts: 7, // 1 initial + 6 retries with the 1,2,4,8,16,32 schedule
         }
     }
@@ -96,7 +96,7 @@ impl MediaWikiClient {
     /// (the API's per-request maximum).
     pub async fn fetch_revisions(&self, title: &str, limit: u32) -> Result<Vec<Revision>> {
         let limit = limit.clamp(1, 500);
-        let mut url = Url::parse(tome_config::WIKIPEDIA_ACTION_API)
+        let mut url = Url::parse(tome_core::WIKIPEDIA_ACTION_API)
             .map_err(|e| TomeError::Api(format!("parse action api url: {e}")))?;
         url.query_pairs_mut()
             .append_pair("action", "query")
