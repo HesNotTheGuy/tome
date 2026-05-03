@@ -185,7 +185,7 @@ export const tome: TomeService = {
         maxArticles,
       });
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   countEmbeddings() {
@@ -206,7 +206,7 @@ export const tome: TomeService = {
     try {
       return await invoke<string>("download_chat_model");
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   askTome(question) {
@@ -229,7 +229,7 @@ export const tome: TomeService = {
     try {
       return await invoke<GeotagSummary>("ingest_geotags", { path });
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   async ingestCategorylinks(path, onProgress) {
@@ -241,7 +241,7 @@ export const tome: TomeService = {
     try {
       return await invoke<CategoryIngestSummary>("ingest_categorylinks", { path });
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   categoryMembers(category, kind, limit) {
@@ -269,7 +269,7 @@ export const tome: TomeService = {
     try {
       return await invoke<RedirectIngestSummary>("ingest_redirects", { path });
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   countRedirects() {
@@ -292,7 +292,7 @@ export const tome: TomeService = {
     try {
       return await invoke<IngestSummary>("ingest_index", { path });
     } finally {
-      unlisten();
+      await unlisten();
     }
   },
   healthCheck() {

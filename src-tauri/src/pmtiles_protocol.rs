@@ -72,6 +72,20 @@ fn serve<R: Runtime>(
     };
     let len = end_inclusive - start + 1;
 
+    // MapLibre + the pmtiles JS lib only ever request small windows
+    // (typically a few KB to tens of KB). A request without a Range
+    // header against a multi-GB pmtiles file would otherwise allocate
+    // the entire file size into a single Vec — enough to OOM the
+    // process. Cap the response body at a sane ceiling and return 416
+    // so the caller can re-request a smaller window.
+    const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024; // 32 MiB
+    if len > MAX_RESPONSE_BYTES {
+        return error(
+            416,
+            "requested range exceeds the per-request ceiling; use a smaller Range",
+        );
+    }
+
     let body: Cow<'static, [u8]> = if method == "HEAD" {
         Cow::Borrowed(&[])
     } else {

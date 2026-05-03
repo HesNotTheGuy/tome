@@ -834,7 +834,8 @@ function MapSourceSection() {
           >
             maps.protomaps.com/builds/
           </a>
-          . Without this, the map falls back to live OSM tiles (needs network).
+          . Without this, the Map pane shows pins on a blank background — no
+          online fallback (Tome is strictly offline-first).
         </p>
         <div className="text-xs text-tome-muted">
           Currently configured:{" "}

@@ -694,17 +694,30 @@ impl ArticleStore for SqliteArticleStore {
     fn search_categories(&self, prefix: &str, limit: u32) -> Result<Vec<String>> {
         let conn = self.lock()?;
         // SQLite's LIKE is case-insensitive for ASCII by default. Normalize
-        // spaces to underscores in the pattern so either form works.
-        let pattern = format!("{}%", prefix.replace(' ', "_"));
+        // spaces to underscores so either form matches, then escape the
+        // wildcard meta-characters (% _ \) so a user typing "100%" doesn't
+        // match every category and "_help" doesn't gobble preceding chars.
+        let normalized = prefix.replace(' ', "_");
+        let mut escaped = String::with_capacity(normalized.len() + 4);
+        for c in normalized.chars() {
+            match c {
+                '\\' | '%' | '_' => {
+                    escaped.push('\\');
+                    escaped.push(c);
+                }
+                _ => escaped.push(c),
+            }
+        }
+        escaped.push('%');
         let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT cl_to FROM categorylinks
-                 WHERE cl_to LIKE ?1
+                 WHERE cl_to LIKE ?1 ESCAPE '\\'
                  ORDER BY cl_to LIMIT ?2",
             )
             .map_err(|e| TomeError::Storage(format!("prepare search_categories: {e}")))?;
         let rows = stmt
-            .query_map(params![pattern, limit as i64], |row| {
+            .query_map(params![escaped, limit as i64], |row| {
                 row.get::<_, String>(0).map(|s| s.replace('_', " "))
             })
             .map_err(|e| TomeError::Storage(format!("query search_categories: {e}")))?;

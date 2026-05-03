@@ -132,14 +132,19 @@ mod llama_impl {
 
     /// Process-wide llama.cpp backend. The C library expects to be
     /// initialized exactly once; subsequent inits return the same handle.
-    static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
+    /// We cache the init result (Ok or Err) so repeated calls don't
+    /// retry a failing init, and so a failure surfaces as a real error
+    /// rather than panicking the process via `expect`.
+    static BACKEND: OnceLock<std::result::Result<LlamaBackend, String>> = OnceLock::new();
 
     fn backend() -> Result<&'static LlamaBackend> {
-        BACKEND
-            .get_or_init(|| LlamaBackend::init().expect("init llama backend (process-wide, once)"));
-        BACKEND
-            .get()
-            .ok_or_else(|| TomeError::Other("llama backend not initialized".into()))
+        let cached = BACKEND.get_or_init(|| LlamaBackend::init().map_err(|e| e.to_string()));
+        match cached {
+            Ok(b) => Ok(b),
+            Err(msg) => Err(TomeError::Other(format!(
+                "llama backend init failed: {msg}"
+            ))),
+        }
     }
 
     /// Default chat engine backed by [`llama-cpp-2`].

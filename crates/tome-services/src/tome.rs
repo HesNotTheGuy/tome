@@ -76,6 +76,12 @@ pub struct Tome {
     /// articles button or Semantic search) downloads the ~33 MB model into
     /// `<data_dir>/ai/models/`. Subsequent calls are zero-cost.
     embedder: OnceLock<Arc<dyn Embedder>>,
+    /// Lazy-initialized chat engine. First touch loads the GGUF model
+    /// (~2.3 GB) into RAM. Mirrors the embedder pattern — without this
+    /// every Ask Tome question would re-instantiate the engine and
+    /// re-read the model from disk, making the second question feel
+    /// hung.
+    chat_engine: OnceLock<Arc<LlamaChatEngine>>,
 }
 
 impl Tome {
@@ -98,7 +104,23 @@ impl Tome {
             data_dir,
             prefer_api_for_cold: true,
             embedder: OnceLock::new(),
+            chat_engine: OnceLock::new(),
         }
+    }
+
+    /// Lazy-init the chat engine. First call constructs and stashes;
+    /// subsequent calls return the cached `Arc`. Reusing the engine
+    /// across requests is critical — it owns the loaded GGUF model
+    /// inside its own `Mutex<Option<LlamaModel>>`, and re-creating the
+    /// engine per request would force a 2.3 GB re-load every time.
+    fn chat_engine(&self) -> Result<Arc<LlamaChatEngine>> {
+        if let Some(e) = self.chat_engine.get() {
+            return Ok(e.clone());
+        }
+        let engine = LlamaChatEngine::new(self.chat_config())?;
+        let arc = Arc::new(engine);
+        let stored = self.chat_engine.get_or_init(|| arc.clone());
+        Ok(stored.clone())
     }
 
     /// Get-or-init the embedder. Blocking on first call (model download +
@@ -418,12 +440,19 @@ impl Tome {
 
     /// Configure (or clear) the dump file path. Persisted to settings.json
     /// immediately so the value survives the next launch.
+    ///
+    /// Order matters: persist to disk first, then update the in-memory
+    /// lock. If the disk write fails (full disk, permission), the in-
+    /// memory state stays consistent with what would be reloaded on
+    /// the next launch — otherwise a save failure would leave a ghost
+    /// path that vanishes on restart.
     pub fn set_dump_path(&self, path: Option<PathBuf>) -> Result<()> {
+        self.save_settings(|s| s.dump_path = path.clone())?;
         *self
             .dump_path
             .write()
-            .map_err(|e| TomeError::Other(format!("dump path lock poisoned: {e}")))? = path.clone();
-        self.save_settings(|s| s.dump_path = path)
+            .map_err(|e| TomeError::Other(format!("dump path lock poisoned: {e}")))? = path;
+        Ok(())
     }
 
     /// The last index path the user ingested, if any. Used by the UI to
@@ -921,7 +950,7 @@ impl Tome {
             }
         }
 
-        let engine = LlamaChatEngine::new(self.chat_config())?;
+        let engine = self.chat_engine()?;
         engine.answer(question, &context)
     }
 }

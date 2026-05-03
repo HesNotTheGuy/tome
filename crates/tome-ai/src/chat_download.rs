@@ -63,14 +63,13 @@ mod chat_impl {
     use hf_hub::api::tokio::{ApiBuilder, ApiError};
 
     /// Download the GGUF described by `config` from HuggingFace into
-    /// `config.cache_dir`. `on_progress` is called periodically with the
-    /// bytes transferred so far; the total size is exposed once known via
-    /// the first non-zero call.
+    /// `config.cache_dir`. `on_progress` receives bytes-on-disk readings
+    /// during the download — see the polling loop below for the cadence.
     ///
     /// **Blocking-async**: this is `async fn` and should be driven from a
     /// `spawn_blocking` worker on the Tauri side so the IPC reactor stays
     /// responsive. The work itself is I/O bound.
-    pub async fn download_chat_model<F>(config: &ChatConfig, _on_progress: F) -> Result<PathBuf>
+    pub async fn download_chat_model<F>(config: &ChatConfig, mut on_progress: F) -> Result<PathBuf>
     where
         F: FnMut(u64) + Send + 'static,
     {
@@ -85,14 +84,43 @@ mod chat_impl {
             .map_err(|e: ApiError| TomeError::Other(format!("init hf api: {e}")))?;
 
         let repo = api.model(config.model_repo.clone());
-        // hf-hub doesn't expose progress callbacks per-byte in stable
-        // releases; we settle for "completed" reporting after the call
-        // returns. Future work: stream the response ourselves and emit
-        // progress events. For now the UI shows a spinner not a bar.
+
+        // hf-hub doesn't expose per-byte progress callbacks in its stable
+        // API. To still give the UI something to display during a multi-GB
+        // download, we spawn a polling task that stats hf-hub's working
+        // directory once per second and emits the largest in-progress file
+        // size we find. Crude, but real numbers — the UI sees actual bytes
+        // landing on disk rather than the previous "0 MB the whole time"
+        // bug. A future commit can replace this with a streaming reqwest
+        // download for proper bytes-transferred + total-size events.
+        let cache_root = config.cache_dir.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let progress_handle = tokio::spawn(async move {
+            let mut last = 0_u64;
+            loop {
+                tokio::select! {
+                    _ = &mut cancel_rx => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                }
+                let size = walking_largest_file(&cache_root).unwrap_or(0);
+                if size > last {
+                    last = size;
+                    on_progress(size);
+                }
+            }
+            // Final tick after cancel so the UI sees the completed size.
+            let final_size = walking_largest_file(&cache_root).unwrap_or(last);
+            on_progress(final_size);
+        });
+
         let path = repo
             .get(&config.model_file)
             .await
             .map_err(|e| TomeError::Other(format!("download {}: {e}", config.model_file)))?;
+
+        // Stop the polling task and wait for its final progress emission.
+        let _ = cancel_tx.send(());
+        let _ = progress_handle.await;
 
         // Move the cached file to the deterministic path we promised
         // callers via `expected_path`. hf-hub returns its own internal
@@ -113,6 +141,39 @@ mod chat_impl {
             }
         }
         Ok(target)
+    }
+
+    /// Walk the cache root and return the biggest single regular file we
+    /// see. hf-hub places the partial GGUF into a subdirectory; we don't
+    /// need to know exactly where, just "what's the largest in-flight
+    /// thing" so the UI has a credible byte counter. Returns `None` if
+    /// the directory doesn't exist yet.
+    fn walking_largest_file(root: &std::path::Path) -> Option<u64> {
+        fn visit(dir: &std::path::Path, max: &mut u64) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                let p = e.path();
+                if ft.is_dir() {
+                    visit(&p, max);
+                } else if ft.is_file()
+                    && let Ok(m) = e.metadata()
+                {
+                    let s = m.len();
+                    if s > *max {
+                        *max = s;
+                    }
+                }
+            }
+        }
+        if !root.exists() {
+            return None;
+        }
+        let mut max = 0_u64;
+        visit(root, &mut max);
+        Some(max)
     }
 }
 
