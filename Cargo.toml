@@ -31,8 +31,12 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Async runtime
-tokio = { version = "1", features = ["full", "test-util"] }
+# Async runtime. `full` keeps the tunables minimal — every workspace
+# member that imports tokio gets the same set. `test-util` (which
+# exposes pause/advance APIs you do NOT want compiled into release
+# builds) is opted into per-crate via a `tokio = { workspace = true,
+# features = ["test-util"] }` line in [dev-dependencies] only.
+tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 
 # Logging

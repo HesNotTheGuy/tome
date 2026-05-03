@@ -23,3 +23,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
+# Tests use `#[tokio::test(start_paused = true)]` for deterministic
+# rate-limit / breaker timing. The test-util feature is dev-only —
+# never compiled into production.
+tokio = { workspace = true, features = ["test-util"] }
