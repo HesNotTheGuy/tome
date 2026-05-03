@@ -147,24 +147,6 @@ async fn kill_switch_blocks_all_traffic() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn request_log_records_attempts_and_outcomes() {
-    let transport = Arc::new(MockTransport::new(vec![
-        MockResponse::ok(503, Vec::new()),
-        MockResponse::ok(200, b"ok".to_vec()),
-    ]));
-    let kill = Arc::new(KillSwitch::new());
-    let client = MediaWikiClient::new(config_with_max_attempts(3), transport, kill);
-
-    let _ = client.fetch_html("Photon", None).await.unwrap();
-    let log = client.recent_requests();
-    assert_eq!(log.len(), 2);
-    assert_eq!(log[0].status, Some(503));
-    assert!(log[0].error.is_some());
-    assert_eq!(log[1].status, Some(200));
-    assert!(log[1].error.is_none());
-}
-
-#[tokio::test(start_paused = true)]
 async fn rate_limit_paces_concurrent_calls() {
     // 11 responses; 11 sequential fetches at 10rps should take ~1s once
     // the burst capacity is exhausted (the 11th waits 100ms).

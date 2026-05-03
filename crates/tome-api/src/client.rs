@@ -78,14 +78,6 @@ impl MediaWikiClient {
         self.breaker.is_open()
     }
 
-    pub fn recent_requests(&self) -> Vec<RequestEntry> {
-        self.log.snapshot()
-    }
-
-    pub fn cache_size(&self) -> usize {
-        self.cache.len()
-    }
-
     /// Fetch the rendered HTML for an article from the MediaWiki Core REST
     /// endpoint. If `revision` is provided, that specific revision is fetched
     /// (and cached forever — revisions are immutable).

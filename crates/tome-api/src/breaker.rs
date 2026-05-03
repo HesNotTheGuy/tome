@@ -33,22 +33,10 @@ impl Default for CircuitBreaker {
 
 impl CircuitBreaker {
     pub fn new() -> Self {
-        Self::with_config(
-            DEFAULT_ERROR_THRESHOLD,
-            DEFAULT_ERROR_WINDOW,
-            DEFAULT_OPEN_DURATION,
-        )
-    }
-
-    pub fn with_config(
-        error_threshold: usize,
-        error_window: Duration,
-        open_duration: Duration,
-    ) -> Self {
         Self {
-            error_threshold,
-            error_window,
-            open_duration,
+            error_threshold: DEFAULT_ERROR_THRESHOLD,
+            error_window: DEFAULT_ERROR_WINDOW,
+            open_duration: DEFAULT_OPEN_DURATION,
             state: Mutex::new(State {
                 errors: VecDeque::new(),
                 opened_at: None,
@@ -90,11 +78,6 @@ impl CircuitBreaker {
         if state.errors.len() >= self.error_threshold {
             state.opened_at = Some(now);
         }
-    }
-
-    pub fn record_success(&self) {
-        // Successes don't unwind the rolling error window per the spec, but
-        // a method is exposed in case future policy wants it.
     }
 
     #[cfg(test)]

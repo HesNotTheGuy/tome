@@ -10,7 +10,7 @@
 //!    with the BM25 results from [`tome-search`](../tome_search/index.html)
 //!    via Reciprocal Rank Fusion at the services layer for hybrid ranking.
 //!
-//! 2. **Local LLM with retrieval-augmented generation** ([`rag`]). The
+//! 2. **Local LLM with retrieval-augmented generation** ([`chat`]). The
 //!    user asks a question; the existing search returns the top-k articles;
 //!    those articles are fed to a small local LLM as context; the model
 //!    answers with citations back to the source articles. Strictly opt-in,
@@ -44,18 +44,3 @@
 pub mod chat;
 pub mod chat_download;
 pub mod embedding;
-pub mod rag;
-
-/// Configuration knobs for the AI subsystem. Threaded through from
-/// `tome-config` so the same settings file owns the source of truth.
-///
-/// `Default::default()` returns an everything-off config, which is the
-/// shipping default — AI capabilities are strictly opt-in.
-#[derive(Debug, Clone, Default)]
-pub struct AiConfig {
-    /// Master switch. When false, every AI surface is a no-op.
-    pub enabled: bool,
-    /// Subsystems can be toggled independently.
-    pub semantic_search_enabled: bool,
-    pub rag_enabled: bool,
-}

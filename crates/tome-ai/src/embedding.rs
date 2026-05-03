@@ -48,29 +48,6 @@ pub trait Embedder: Send + Sync {
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
 }
 
-/// Cosine similarity between two same-dimension vectors. Inputs are not
-/// required to be normalized; we compute it from scratch.
-///
-/// Returns a value in `[-1.0, 1.0]`. Higher is more similar. Returns `0.0`
-/// when either vector is the zero vector (all components zero) — those
-/// shouldn't occur from a real embedder but we don't want to NaN out the
-/// caller's ranking.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len(), "cosine of mismatched dims");
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na == 0.0 || nb == 0.0 {
-        return 0.0;
-    }
-    dot / (na.sqrt() * nb.sqrt())
-}
-
 #[cfg(feature = "semantic-search")]
 mod fastembed_impl {
     use super::*;
@@ -171,46 +148,10 @@ mod stub_impl {
 #[cfg(not(feature = "semantic-search"))]
 pub use stub_impl::DefaultEmbedder;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "semantic-search")))]
 mod tests {
     use super::*;
 
-    #[test]
-    fn cosine_of_identical_vectors_is_one() {
-        let a = vec![0.1, 0.2, 0.3];
-        let b = vec![0.1, 0.2, 0.3];
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cosine_of_opposite_vectors_is_negative_one() {
-        let a = vec![0.1, 0.2, 0.3];
-        let b = vec![-0.1, -0.2, -0.3];
-        assert!((cosine_similarity(&a, &b) + 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cosine_of_orthogonal_vectors_is_zero() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
-        assert!(cosine_similarity(&a, &b).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cosine_of_zero_vector_is_zero_not_nan() {
-        let a = vec![0.0, 0.0, 0.0];
-        let b = vec![1.0, 2.0, 3.0];
-        assert_eq!(cosine_similarity(&a, &b), 0.0);
-    }
-
-    #[test]
-    fn cosine_handles_unnormalized_inputs() {
-        let a = vec![2.0, 0.0];
-        let b = vec![5.0, 0.0]; // same direction, larger magnitude
-        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
-    }
-
-    #[cfg(not(feature = "semantic-search"))]
     #[test]
     fn stub_returns_clear_error_when_feature_disabled() {
         let r = DefaultEmbedder::new(PathBuf::from("/tmp/never"));
