@@ -479,6 +479,14 @@ impl Tome {
         })
     }
 
+    /// A uniformly-random article title from any non-evicted tier. Used
+    /// by the Reader header's "random article" button. Returns `None`
+    /// when storage is empty (no dump ingested yet) so the UI can
+    /// disable the button rather than show an error.
+    pub fn random_article_title(&self) -> Result<Option<String>> {
+        self.storage.random_article_title()
+    }
+
     /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)
     /// and upsert every entry as Cold-tier metadata. The full index is
     /// ~6.5M lines for English Wikipedia; this typically completes in 30-90s

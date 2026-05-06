@@ -92,6 +92,7 @@ export default function App() {
         </nav>
         <div className="flex items-center gap-2">
           <SearchBar onOpenArticle={(title) => setActiveTitle(title)} />
+          <RandomButton onOpen={(title) => setActiveTitle(title)} />
           <PresetPicker />
           <ThemeToggle />
         </div>
@@ -120,6 +121,64 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Header button that picks a uniformly-random article from local storage
+ * and opens it in the Reader. Disables itself when storage is empty (no
+ * dump ingested yet) so a user without articles isn't given a useless
+ * button. The dice icon is universally read as "random."
+ */
+function RandomButton({ onOpen }: { onOpen: (title: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [empty, setEmpty] = useState<boolean | null>(null);
+
+  // Check on mount whether storage has anything to randomize over.
+  // Re-checking after every click would be paranoid; the user ingesting
+  // a dump mid-session is rare enough to ignore.
+  useEffect(() => {
+    if (!isTauri()) {
+      setEmpty(true);
+      return;
+    }
+    tome
+      .tierCounts()
+      .then((c) => {
+        const total = c.hot + c.warm + c.cold + c.evicted;
+        setEmpty(total === 0);
+      })
+      .catch(() => setEmpty(null));
+  }, []);
+
+  async function pick() {
+    if (!isTauri() || busy) return;
+    setBusy(true);
+    try {
+      const title = await tome.randomArticle();
+      if (title) onOpen(title);
+    } catch {
+      // Swallow — the button isn't load-bearing.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={pick}
+      disabled={busy || empty === true || empty === null}
+      title={
+        empty === true
+          ? "Ingest a Wikipedia dump to enable"
+          : "Open a random article"
+      }
+      aria-label="Open a random article"
+      className="px-2 py-1 text-sm rounded text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+    >
+      🎲
+    </button>
   );
 }
 

@@ -64,6 +64,7 @@ pub fn run() {
             breaker_open,
             user_agent,
             tier_counts,
+            random_article,
             ingest_index,
             ingest_geotags,
             count_geotags,
@@ -256,6 +257,11 @@ fn user_agent(state: State<'_, Arc<Tome>>) -> String {
 #[tauri::command]
 fn tier_counts(state: State<'_, Arc<Tome>>) -> Result<TierCounts, String> {
     state.tier_counts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn random_article(state: State<'_, Arc<Tome>>) -> Result<Option<String>, String> {
+    state.random_article_title().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

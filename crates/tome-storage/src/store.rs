@@ -38,6 +38,11 @@ pub trait ArticleStore: Send + Sync {
     /// Up to `n` non-pinned Hot/Warm article ids ordered by least-recently
     /// accessed first. Used by the demotion policy in higher layers.
     fn lru_candidates(&self, n: u32) -> Result<Vec<u64>>;
+    /// A uniformly-random article title from any non-evicted tier.
+    /// Returns `None` if storage is empty. Powers the "Random article"
+    /// button in the header — gives users a way to discover content
+    /// without making any editorial choices on our part.
+    fn random_article_title(&self) -> Result<Option<String>>;
 
     // --- Geotags ---
 
@@ -852,6 +857,25 @@ impl ArticleStore for SqliteArticleStore {
             .into_iter()
             .map(|v| v as u64)
             .collect())
+    }
+
+    fn random_article_title(&self) -> Result<Option<String>> {
+        let conn = self.lock()?;
+        // ORDER BY RANDOM() does a full table scan but the LIMIT 1 keeps
+        // memory bounded and the corpus tops out at ~6.8 M rows for
+        // enwiki — well under a second on any modern disk. For an
+        // interactive button click that's plenty.
+        // Excluding 'evicted' so a user who deliberately marked an
+        // article as off-limits doesn't get bounced into it.
+        conn.query_row(
+            "SELECT title FROM articles
+             WHERE tier IN ('hot','warm','cold')
+             ORDER BY RANDOM() LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| TomeError::Storage(format!("random_article_title: {e}")))
     }
 
     fn batch_upsert_embeddings(&self, entries: &[(u64, Vec<f32>, &str)]) -> Result<u64> {

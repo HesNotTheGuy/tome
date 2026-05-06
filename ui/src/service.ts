@@ -56,6 +56,7 @@ export interface TomeService {
   breakerOpen(): Promise<boolean>;
   userAgent(): Promise<string>;
   tierCounts(): Promise<TierCounts>;
+  randomArticle(): Promise<string | null>;
   ingestIndex(
     path: string,
     onProgress: (count: number) => void,
@@ -152,6 +153,9 @@ export const tome: TomeService = {
   },
   tierCounts() {
     return invoke<TierCounts>("tier_counts");
+  },
+  randomArticle() {
+    return invoke<string | null>("random_article");
   },
   fetchRevisions(title, limit) {
     return invoke<Revision[]>("fetch_revisions", { title, limit });
