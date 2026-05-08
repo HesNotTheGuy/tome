@@ -200,6 +200,8 @@ export default function Settings() {
         </div>
       </Section>
 
+      <HistoryToggleSection />
+
       <SemanticSearchSection />
 
       <ChatModelSection />
@@ -1039,6 +1041,55 @@ function ChatModelSection() {
         articles — fully offline, no cloud calls. The chat backend itself
         ships in a follow-up commit; this lets you start the download
         ahead of time.
+      </div>
+    </Section>
+  );
+}
+
+function HistoryToggleSection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .historyEnabled()
+      .then(setEnabled)
+      .catch(() => setEnabled(null));
+  }, []);
+
+  async function toggle() {
+    if (!isTauri() || enabled === null) return;
+    const next = !enabled;
+    try {
+      await tome.setHistoryEnabled(next);
+      setEnabled(next);
+    } catch {
+      // best-effort
+    }
+  }
+
+  return (
+    <Section title="History">
+      <Row label="Track reading history">
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={!isTauri() || enabled === null}
+          className={
+            "px-3 py-1 text-sm rounded transition-colors " +
+            (enabled
+              ? "bg-tome-surface-2 text-tome-text hover:bg-tome-border"
+              : "bg-tome-bg text-tome-muted border border-tome-border hover:bg-tome-surface-2")
+          }
+        >
+          {enabled === null ? "…" : enabled ? "on" : "off"}
+        </button>
+      </Row>
+      <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+        When on, opening an article in the Reader bumps its
+        last-accessed timestamp so it shows up in the History pane.
+        When off, no new history is recorded; existing entries stay
+        until you Clear history from the History pane itself.
       </div>
     </Section>
   );

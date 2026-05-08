@@ -113,6 +113,14 @@ export interface ChatAnswer {
   citations: number[];
 }
 
+export interface HistoryEntry {
+  page_id: number;
+  title: string;
+  /** Unix epoch seconds. 0 means never read. */
+  last_accessed: number;
+  access_count: number;
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

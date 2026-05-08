@@ -79,6 +79,12 @@ pub struct Settings {
     /// the Map pane. When `None`, the Map falls back to live OSM tiles.
     #[serde(default)]
     pub map_source_path: Option<PathBuf>,
+    /// Whether the Reader records article views in `last_accessed` /
+    /// `access_count`. When `false`, `Tome::touch_article` becomes a
+    /// no-op and the History pane stays empty. Default on; off is the
+    /// privacy-conscious choice.
+    #[serde(default = "default_true")]
+    pub history_enabled: bool,
 }
 
 impl Default for Settings {
@@ -88,6 +94,7 @@ impl Default for Settings {
             last_index_path: None,
             recommendations_enabled: true,
             map_source_path: None,
+            history_enabled: true,
         }
     }
 }
@@ -148,6 +155,7 @@ mod tests {
             last_index_path: Some(PathBuf::from("/some/index.bz2")),
             recommendations_enabled: false,
             map_source_path: Some(PathBuf::from("/maps/world.pmtiles")),
+            history_enabled: false,
         };
         s.save(dir.path()).unwrap();
         let loaded = Settings::load(dir.path());

@@ -26,7 +26,7 @@ use tome_services::{
 };
 use tome_storage::{
     ArchiveStore, ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag,
-    MappedGeotag, RelatedArticle, SavedRevisionMeta, SqliteArticleStore,
+    HistoryEntry, MappedGeotag, RelatedArticle, SavedRevisionMeta, SqliteArticleStore,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +65,10 @@ pub fn run() {
             user_agent,
             tier_counts,
             random_article,
+            recent_articles,
+            clear_history,
+            history_enabled,
+            set_history_enabled,
             ingest_index,
             ingest_geotags,
             count_geotags,
@@ -262,6 +266,28 @@ fn tier_counts(state: State<'_, Arc<Tome>>) -> Result<TierCounts, String> {
 #[tauri::command]
 fn random_article(state: State<'_, Arc<Tome>>) -> Result<Option<String>, String> {
     state.random_article_title().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn recent_articles(limit: u32, state: State<'_, Arc<Tome>>) -> Result<Vec<HistoryEntry>, String> {
+    state.recent_articles(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.clear_history().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn history_enabled(state: State<'_, Arc<Tome>>) -> bool {
+    state.history_enabled()
+}
+
+#[tauri::command]
+fn set_history_enabled(enabled: bool, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state
+        .set_history_enabled(enabled)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

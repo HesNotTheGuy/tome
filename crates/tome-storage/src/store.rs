@@ -43,6 +43,14 @@ pub trait ArticleStore: Send + Sync {
     /// button in the header — gives users a way to discover content
     /// without making any editorial choices on our part.
     fn random_article_title(&self) -> Result<Option<String>>;
+    /// Recently-read articles ordered by `last_accessed DESC`. Returns
+    /// at most `limit` rows. Excludes articles never read (last_accessed = 0).
+    /// Powers the History pane.
+    fn recent_articles(&self, limit: u32) -> Result<Vec<HistoryEntry>>;
+    /// Reset `last_accessed = 0` and `access_count = 0` on every row in
+    /// articles. Used by the History pane's "Clear history" button.
+    /// Returns the number of rows touched (i.e., previously had access > 0).
+    fn clear_history(&self) -> Result<u64>;
 
     // --- Geotags ---
 
@@ -122,6 +130,16 @@ pub struct EmbeddingHit {
     pub page_id: u64,
     pub title: String,
     pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HistoryEntry {
+    pub page_id: u64,
+    pub title: String,
+    /// Unix epoch seconds of the last `touch()` call. 0 = never read.
+    pub last_accessed: i64,
+    /// Total reads since the last `clear_history()`.
+    pub access_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -876,6 +894,49 @@ impl ArticleStore for SqliteArticleStore {
         )
         .optional()
         .map_err(|e| TomeError::Storage(format!("random_article_title: {e}")))
+    }
+
+    fn recent_articles(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT page_id, title, last_accessed, access_count
+                 FROM articles
+                 WHERE last_accessed > 0
+                 ORDER BY last_accessed DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare recent_articles: {e}")))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(HistoryEntry {
+                    page_id: row.get::<_, i64>(0)? as u64,
+                    title: row.get(1)?,
+                    last_accessed: row.get(2)?,
+                    access_count: row.get::<_, i64>(3)? as u32,
+                })
+            })
+            .map_err(|e| TomeError::Storage(format!("query recent_articles: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row recent: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    fn clear_history(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        // Touch only rows that were actually read so the row-count we
+        // return is meaningful.
+        let n = conn
+            .execute(
+                "UPDATE articles
+                 SET last_accessed = 0, access_count = 0
+                 WHERE last_accessed > 0 OR access_count > 0",
+                [],
+            )
+            .map_err(|e| TomeError::Storage(format!("clear_history: {e}")))?;
+        Ok(n as u64)
     }
 
     fn batch_upsert_embeddings(&self, entries: &[(u64, Vec<f32>, &str)]) -> Result<u64> {

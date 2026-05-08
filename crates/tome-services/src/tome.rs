@@ -245,7 +245,12 @@ impl Tome {
             }
         };
 
-        self.storage.touch(record.metadata.page_id)?;
+        // Only update last_accessed when history tracking is enabled.
+        // The privacy-conscious user toggles this off in Settings; we
+        // honor that immediately rather than retroactively wiping rows.
+        if self.settings().history_enabled {
+            self.storage.touch(record.metadata.page_id)?;
+        }
         Ok(response)
     }
 
@@ -485,6 +490,27 @@ impl Tome {
     /// disable the button rather than show an error.
     pub fn random_article_title(&self) -> Result<Option<String>> {
         self.storage.random_article_title()
+    }
+
+    /// Recently-read articles, newest first. Empty when history
+    /// tracking has been off the whole session, or after a Clear
+    /// history click.
+    pub fn recent_articles(&self, limit: u32) -> Result<Vec<tome_storage::HistoryEntry>> {
+        self.storage.recent_articles(limit.clamp(1, 1000))
+    }
+
+    /// Reset every article's last_accessed + access_count. Returns the
+    /// number of rows that previously had non-zero access.
+    pub fn clear_history(&self) -> Result<u64> {
+        self.storage.clear_history()
+    }
+
+    pub fn history_enabled(&self) -> bool {
+        self.settings().history_enabled
+    }
+
+    pub fn set_history_enabled(&self, enabled: bool) -> Result<()> {
+        self.save_settings(|s| s.history_enabled = enabled)
     }
 
     /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)

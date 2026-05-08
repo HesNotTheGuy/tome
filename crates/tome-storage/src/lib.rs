@@ -27,4 +27,6 @@ pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
 pub use redirect::Redirect;
-pub use store::{ArticleStore, EmbeddingHit, MappedGeotag, RelatedArticle, SqliteArticleStore};
+pub use store::{
+    ArticleStore, EmbeddingHit, HistoryEntry, MappedGeotag, RelatedArticle, SqliteArticleStore,
+};

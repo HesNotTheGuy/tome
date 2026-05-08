@@ -15,6 +15,7 @@ import {
   ChatAnswer,
   EmbeddingHit,
   EmbeddingIngestSummary,
+  HistoryEntry,
   Geotag,
   GeotagSummary,
   IngestSummary,
@@ -57,6 +58,10 @@ export interface TomeService {
   userAgent(): Promise<string>;
   tierCounts(): Promise<TierCounts>;
   randomArticle(): Promise<string | null>;
+  recentArticles(limit: number): Promise<HistoryEntry[]>;
+  clearHistory(): Promise<number>;
+  historyEnabled(): Promise<boolean>;
+  setHistoryEnabled(enabled: boolean): Promise<void>;
   ingestIndex(
     path: string,
     onProgress: (count: number) => void,
@@ -156,6 +161,18 @@ export const tome: TomeService = {
   },
   randomArticle() {
     return invoke<string | null>("random_article");
+  },
+  recentArticles(limit) {
+    return invoke<HistoryEntry[]>("recent_articles", { limit });
+  },
+  clearHistory() {
+    return invoke<number>("clear_history");
+  },
+  historyEnabled() {
+    return invoke<boolean>("history_enabled");
+  },
+  setHistoryEnabled(enabled) {
+    return invoke<void>("set_history_enabled", { enabled });
   },
   fetchRevisions(title, limit) {
     return invoke<Revision[]>("fetch_revisions", { title, limit });
