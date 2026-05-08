@@ -25,8 +25,9 @@ use tome_services::{
     IngestSummary, RedirectIngestSummary, TierCounts, Tome,
 };
 use tome_storage::{
-    ArchiveStore, ArticleStore, CategoryMember, CategoryMemberKind, EmbeddingHit, Geotag,
-    HistoryEntry, MappedGeotag, RelatedArticle, SavedRevisionMeta, SqliteArticleStore,
+    ArchiveStore, ArticleStore, Bookmark, BookmarkFolder, CategoryMember, CategoryMemberKind,
+    EmbeddingHit, Geotag, HistoryEntry, MappedGeotag, RelatedArticle, SavedRevisionMeta,
+    SqliteArticleStore,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -69,6 +70,17 @@ pub fn run() {
             clear_history,
             history_enabled,
             set_history_enabled,
+            add_bookmark,
+            remove_bookmark,
+            move_bookmark,
+            is_bookmarked,
+            bookmarks_in_folder,
+            all_bookmarks,
+            count_bookmarks,
+            create_folder,
+            rename_folder,
+            delete_folder,
+            list_folders,
             ingest_index,
             ingest_geotags,
             count_geotags,
@@ -288,6 +300,90 @@ fn set_history_enabled(enabled: bool, state: State<'_, Arc<Tome>>) -> Result<(),
     state
         .set_history_enabled(enabled)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_bookmark(
+    article_title: String,
+    folder_id: Option<i64>,
+    note: Option<String>,
+    state: State<'_, Arc<Tome>>,
+) -> Result<i64, String> {
+    state
+        .add_bookmark(&article_title, folder_id, note.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_bookmark(id: i64, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state.remove_bookmark(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn move_bookmark(
+    id: i64,
+    folder_id: Option<i64>,
+    state: State<'_, Arc<Tome>>,
+) -> Result<(), String> {
+    state
+        .move_bookmark(id, folder_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn is_bookmarked(article_title: String, state: State<'_, Arc<Tome>>) -> Result<bool, String> {
+    state
+        .is_bookmarked(&article_title)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn bookmarks_in_folder(
+    folder_id: Option<i64>,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<Bookmark>, String> {
+    state
+        .bookmarks_in_folder(folder_id, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn all_bookmarks(limit: u32, state: State<'_, Arc<Tome>>) -> Result<Vec<Bookmark>, String> {
+    state.all_bookmarks(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn count_bookmarks(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_bookmarks().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_folder(
+    name: String,
+    parent_id: Option<i64>,
+    state: State<'_, Arc<Tome>>,
+) -> Result<i64, String> {
+    state
+        .create_folder(&name, parent_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_folder(id: i64, new_name: String, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state
+        .rename_folder(id, &new_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_folder(id: i64, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state.delete_folder(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_folders(state: State<'_, Arc<Tome>>) -> Result<Vec<BookmarkFolder>, String> {
+    state.list_folders().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

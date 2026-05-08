@@ -15,6 +15,7 @@
 
 pub mod archive;
 pub mod article;
+pub mod bookmark;
 pub mod category;
 pub mod compression;
 pub mod geotag;
@@ -24,6 +25,7 @@ pub mod store;
 
 pub use archive::{ArchiveStore, SavedRevision, SavedRevisionMeta};
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
+pub use bookmark::{Bookmark, BookmarkFolder};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
 pub use redirect::Redirect;

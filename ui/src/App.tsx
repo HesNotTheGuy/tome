@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Library from "./panes/Library";
 import Reader from "./panes/Reader";
 import Archive from "./panes/Archive";
+import Bookmarks from "./panes/Bookmarks";
 import Browse from "./panes/Browse";
 import History from "./panes/History";
 import MapPane from "./panes/Map";
@@ -13,7 +14,15 @@ import SearchBar from "./components/SearchBar";
 import { tome } from "./service";
 import { isTauri } from "./types";
 
-type Pane = "library" | "reader" | "browse" | "map" | "history" | "archive" | "settings";
+type Pane =
+  | "library"
+  | "reader"
+  | "browse"
+  | "map"
+  | "history"
+  | "bookmarks"
+  | "archive"
+  | "settings";
 
 const PANE_LABEL: Record<Pane, string> = {
   library: "Library",
@@ -21,6 +30,7 @@ const PANE_LABEL: Record<Pane, string> = {
   browse: "Browse",
   map: "Map",
   history: "History",
+  bookmarks: "Bookmarks",
   archive: "Archive",
   settings: "Settings",
 };
@@ -108,6 +118,7 @@ export default function App() {
         {pane === "browse" && <Browse onOpen={(t) => setActiveTitle(t)} />}
         {pane === "map" && <MapPane onOpen={(t) => setActiveTitle(t)} />}
         {pane === "history" && <History onOpen={(t) => setActiveTitle(t)} />}
+        {pane === "bookmarks" && <Bookmarks onOpen={(t) => setActiveTitle(t)} />}
         {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
         {pane === "settings" && <Settings />}
       </main>

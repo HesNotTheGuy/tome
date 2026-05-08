@@ -121,6 +121,21 @@ export interface HistoryEntry {
   access_count: number;
 }
 
+export interface Bookmark {
+  id: number;
+  article_title: string;
+  folder_id: number | null;
+  note: string | null;
+  created_at: number;
+}
+
+export interface BookmarkFolder {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  created_at: number;
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

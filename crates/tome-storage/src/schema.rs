@@ -80,6 +80,41 @@ CREATE TABLE IF NOT EXISTS article_embeddings (
 CREATE INDEX IF NOT EXISTS idx_article_embeddings_model ON article_embeddings(model);
 "#;
 
+// Bookmarks with optional folders. parent_id on bookmark_folders is
+// nullable so root-level folders are supported; the schema allows
+// nesting but the UI today only surfaces a single level — easy to
+// extend without a future migration.
+//
+// `bookmarks.article_title` stores the display title rather than a
+// page_id FK. That way bookmarks survive a re-ingest of the dump
+// (which may rotate page_ids), and the user can bookmark articles
+// they haven't even cached locally yet (resolves through the API on
+// open).
+//
+// `folder_id` is nullable so bookmarks can live "unfiled" at root.
+// `ON DELETE SET NULL` on folder removal preserves bookmarks when a
+// user deletes a folder.
+const MIGRATION_6: &str = r#"
+CREATE TABLE IF NOT EXISTS bookmark_folders (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL,
+    parent_id   INTEGER REFERENCES bookmark_folders(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id             INTEGER PRIMARY KEY,
+    article_title  TEXT    NOT NULL,
+    folder_id      INTEGER REFERENCES bookmark_folders(id) ON DELETE SET NULL,
+    note           TEXT,
+    created_at     INTEGER NOT NULL,
+    UNIQUE(article_title, folder_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bookmarks_folder ON bookmarks(folder_id);
+CREATE INDEX IF NOT EXISTS idx_bookmark_folders_parent ON bookmark_folders(parent_id);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -141,6 +176,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 5: {e}")))?;
     }
 
+    if from < 6 {
+        conn.execute_batch(MIGRATION_6)
+            .map_err(|e| TomeError::Storage(format!("apply migration 6: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![6_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 6: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -153,7 +198,7 @@ mod tests {
     /// The highest migration version this codebase ships. Bump this in lockstep
     /// with new MIGRATION_N constants; the assertion below will catch
     /// mismatches.
-    const CURRENT_VERSION: i32 = 5;
+    const CURRENT_VERSION: i32 = 6;
 
     #[test]
     fn fresh_db_reaches_current_version() {

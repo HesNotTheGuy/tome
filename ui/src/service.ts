@@ -9,6 +9,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import {
   ArticleResponse,
+  Bookmark,
+  BookmarkFolder,
   CategoryIngestSummary,
   CategoryMember,
   CategoryMemberKind,
@@ -62,6 +64,17 @@ export interface TomeService {
   clearHistory(): Promise<number>;
   historyEnabled(): Promise<boolean>;
   setHistoryEnabled(enabled: boolean): Promise<void>;
+  addBookmark(articleTitle: string, folderId: number | null, note: string | null): Promise<number>;
+  removeBookmark(id: number): Promise<void>;
+  moveBookmark(id: number, folderId: number | null): Promise<void>;
+  isBookmarked(articleTitle: string): Promise<boolean>;
+  bookmarksInFolder(folderId: number | null, limit: number): Promise<Bookmark[]>;
+  allBookmarks(limit: number): Promise<Bookmark[]>;
+  countBookmarks(): Promise<number>;
+  createFolder(name: string, parentId: number | null): Promise<number>;
+  renameFolder(id: number, newName: string): Promise<void>;
+  deleteFolder(id: number): Promise<void>;
+  listFolders(): Promise<BookmarkFolder[]>;
   ingestIndex(
     path: string,
     onProgress: (count: number) => void,
@@ -173,6 +186,43 @@ export const tome: TomeService = {
   },
   setHistoryEnabled(enabled) {
     return invoke<void>("set_history_enabled", { enabled });
+  },
+  addBookmark(articleTitle, folderId, note) {
+    return invoke<number>("add_bookmark", {
+      articleTitle,
+      folderId,
+      note,
+    });
+  },
+  removeBookmark(id) {
+    return invoke<void>("remove_bookmark", { id });
+  },
+  moveBookmark(id, folderId) {
+    return invoke<void>("move_bookmark", { id, folderId });
+  },
+  isBookmarked(articleTitle) {
+    return invoke<boolean>("is_bookmarked", { articleTitle });
+  },
+  bookmarksInFolder(folderId, limit) {
+    return invoke<Bookmark[]>("bookmarks_in_folder", { folderId, limit });
+  },
+  allBookmarks(limit) {
+    return invoke<Bookmark[]>("all_bookmarks", { limit });
+  },
+  countBookmarks() {
+    return invoke<number>("count_bookmarks");
+  },
+  createFolder(name, parentId) {
+    return invoke<number>("create_folder", { name, parentId });
+  },
+  renameFolder(id, newName) {
+    return invoke<void>("rename_folder", { id, newName });
+  },
+  deleteFolder(id) {
+    return invoke<void>("delete_folder", { id });
+  },
+  listFolders() {
+    return invoke<BookmarkFolder[]>("list_folders");
   },
   fetchRevisions(title, limit) {
     return invoke<Revision[]>("fetch_revisions", { title, limit });

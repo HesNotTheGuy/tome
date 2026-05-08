@@ -52,6 +52,49 @@ pub trait ArticleStore: Send + Sync {
     /// Returns the number of rows touched (i.e., previously had access > 0).
     fn clear_history(&self) -> Result<u64>;
 
+    // --- Bookmarks ---
+
+    /// Add a bookmark. Returns the new id. If a bookmark for the same
+    /// `(article_title, folder_id)` already exists, returns its id
+    /// (idempotent — clicking the bookmark button twice doesn't create
+    /// duplicates).
+    fn add_bookmark(
+        &self,
+        article_title: &str,
+        folder_id: Option<i64>,
+        note: Option<&str>,
+    ) -> Result<i64>;
+    /// Remove a bookmark by id. Idempotent — removing a missing id is fine.
+    fn remove_bookmark(&self, id: i64) -> Result<()>;
+    /// Move a bookmark to a different folder (or to root with `None`).
+    fn move_bookmark(&self, id: i64, folder_id: Option<i64>) -> Result<()>;
+    /// Whether the article is bookmarked anywhere (any folder, including
+    /// root). Powers the Reader's bookmark button toggle state.
+    fn is_bookmarked(&self, article_title: &str) -> Result<bool>;
+    /// All bookmarks under `folder_id` (or all root-level if `None`),
+    /// ordered by created_at DESC.
+    fn bookmarks_in_folder(
+        &self,
+        folder_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<crate::bookmark::Bookmark>>;
+    /// Every bookmark across every folder, ordered by created_at DESC.
+    fn all_bookmarks(&self, limit: u32) -> Result<Vec<crate::bookmark::Bookmark>>;
+    fn count_bookmarks(&self) -> Result<u64>;
+
+    // --- Bookmark folders ---
+
+    /// Create a new folder. Returns the new id. `parent_id = None`
+    /// creates a root-level folder.
+    fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<i64>;
+    /// Rename a folder.
+    fn rename_folder(&self, id: i64, new_name: &str) -> Result<()>;
+    /// Delete a folder. Bookmarks within it become unfiled
+    /// (`folder_id = NULL`); subfolders are cascade-deleted.
+    fn delete_folder(&self, id: i64) -> Result<()>;
+    /// All folders, ordered by name.
+    fn list_folders(&self) -> Result<Vec<crate::bookmark::BookmarkFolder>>;
+
     // --- Geotags ---
 
     /// Bulk insert/update geotag rows in a single transaction. Returns rows
@@ -939,6 +982,206 @@ impl ArticleStore for SqliteArticleStore {
         Ok(n as u64)
     }
 
+    fn add_bookmark(
+        &self,
+        article_title: &str,
+        folder_id: Option<i64>,
+        note: Option<&str>,
+    ) -> Result<i64> {
+        let conn = self.lock()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Idempotent: if a bookmark already exists for the same
+        // (article_title, folder_id) UNIQUE pair, return its id rather
+        // than erroring out. Folder_id NULL participates in the unique
+        // index per SQLite semantics for nullable composite uniques.
+        // To handle that we explicitly look for an existing match
+        // first.
+        let existing: Option<i64> = match folder_id {
+            Some(fid) => conn
+                .query_row(
+                    "SELECT id FROM bookmarks WHERE article_title = ?1 AND folder_id = ?2",
+                    params![article_title, fid],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| TomeError::Storage(format!("check existing bookmark: {e}")))?,
+            None => conn
+                .query_row(
+                    "SELECT id FROM bookmarks WHERE article_title = ?1 AND folder_id IS NULL",
+                    params![article_title],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| TomeError::Storage(format!("check existing bookmark: {e}")))?,
+        };
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        conn.execute(
+            "INSERT INTO bookmarks (article_title, folder_id, note, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![article_title, folder_id, note, now],
+        )
+        .map_err(|e| TomeError::Storage(format!("insert bookmark: {e}")))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    fn remove_bookmark(&self, id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])
+            .map_err(|e| TomeError::Storage(format!("delete bookmark: {e}")))?;
+        Ok(())
+    }
+
+    fn move_bookmark(&self, id: i64, folder_id: Option<i64>) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE bookmarks SET folder_id = ?1 WHERE id = ?2",
+            params![folder_id, id],
+        )
+        .map_err(|e| TomeError::Storage(format!("move bookmark: {e}")))?;
+        Ok(())
+    }
+
+    fn is_bookmarked(&self, article_title: &str) -> Result<bool> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bookmarks WHERE article_title = ?1",
+                params![article_title],
+                |row| row.get(0),
+            )
+            .map_err(|e| TomeError::Storage(format!("is_bookmarked: {e}")))?;
+        Ok(n > 0)
+    }
+
+    fn bookmarks_in_folder(
+        &self,
+        folder_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<crate::bookmark::Bookmark>> {
+        let conn = self.lock()?;
+        let limit = limit.clamp(1, 10_000) as i64;
+        // Two prepared statements because SQLite's `?` placeholder
+        // doesn't substitute into `IS NULL` cleanly; querying
+        // `folder_id = NULL` always returns no rows.
+        let out: Vec<crate::bookmark::Bookmark> = match folder_id {
+            Some(fid) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, article_title, folder_id, note, created_at
+                         FROM bookmarks WHERE folder_id = ?1
+                         ORDER BY created_at DESC LIMIT ?2",
+                    )
+                    .map_err(|e| TomeError::Storage(format!("prepare bookmarks: {e}")))?;
+                stmt.query_map(params![fid, limit], bookmark_row_to_struct)
+                    .map_err(|e| TomeError::Storage(format!("query bookmarks: {e}")))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|e| TomeError::Storage(format!("collect bookmarks: {e}")))?
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, article_title, folder_id, note, created_at
+                         FROM bookmarks WHERE folder_id IS NULL
+                         ORDER BY created_at DESC LIMIT ?1",
+                    )
+                    .map_err(|e| TomeError::Storage(format!("prepare bookmarks: {e}")))?;
+                stmt.query_map(params![limit], bookmark_row_to_struct)
+                    .map_err(|e| TomeError::Storage(format!("query bookmarks: {e}")))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|e| TomeError::Storage(format!("collect bookmarks: {e}")))?
+            }
+        };
+        Ok(out)
+    }
+
+    fn all_bookmarks(&self, limit: u32) -> Result<Vec<crate::bookmark::Bookmark>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, article_title, folder_id, note, created_at
+                 FROM bookmarks ORDER BY created_at DESC LIMIT ?1",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare all_bookmarks: {e}")))?;
+        let rows: rusqlite::Result<Vec<_>> = stmt
+            .query_map(
+                params![limit.clamp(1, 10_000) as i64],
+                bookmark_row_to_struct,
+            )
+            .map_err(|e| TomeError::Storage(format!("query all_bookmarks: {e}")))?
+            .collect();
+        rows.map_err(|e| TomeError::Storage(format!("collect all_bookmarks: {e}")))
+    }
+
+    fn count_bookmarks(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bookmarks", [], |row| row.get(0))
+            .map_err(|e| TomeError::Storage(format!("count bookmarks: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<i64> {
+        let conn = self.lock()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO bookmark_folders (name, parent_id, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![name, parent_id, now],
+        )
+        .map_err(|e| TomeError::Storage(format!("create folder: {e}")))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    fn rename_folder(&self, id: i64, new_name: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE bookmark_folders SET name = ?1 WHERE id = ?2",
+            params![new_name, id],
+        )
+        .map_err(|e| TomeError::Storage(format!("rename folder: {e}")))?;
+        Ok(())
+    }
+
+    fn delete_folder(&self, id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        // ON DELETE SET NULL on bookmarks.folder_id un-files bookmarks
+        // automatically; ON DELETE CASCADE on bookmark_folders.parent_id
+        // recursively removes subfolders.
+        conn.execute("DELETE FROM bookmark_folders WHERE id = ?1", params![id])
+            .map_err(|e| TomeError::Storage(format!("delete folder: {e}")))?;
+        Ok(())
+    }
+
+    fn list_folders(&self) -> Result<Vec<crate::bookmark::BookmarkFolder>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, parent_id, created_at
+                 FROM bookmark_folders ORDER BY name COLLATE NOCASE",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare list_folders: {e}")))?;
+        let rows: rusqlite::Result<Vec<_>> = stmt
+            .query_map([], |row| {
+                Ok(crate::bookmark::BookmarkFolder {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    parent_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| TomeError::Storage(format!("query list_folders: {e}")))?
+            .collect();
+        rows.map_err(|e| TomeError::Storage(format!("collect list_folders: {e}")))
+    }
+
     fn batch_upsert_embeddings(&self, entries: &[(u64, Vec<f32>, &str)]) -> Result<u64> {
         if entries.is_empty() {
             return Ok(0);
@@ -1114,6 +1357,19 @@ impl ArticleStore for SqliteArticleStore {
 }
 
 /// Encode a vector of f32 as little-endian bytes for SQLite BLOB storage.
+/// Map a SELECT id, article_title, folder_id, note, created_at row to a
+/// Bookmark struct. Pulled out into a free function so the multiple
+/// query sites in the impl can share it.
+fn bookmark_row_to_struct(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::bookmark::Bookmark> {
+    Ok(crate::bookmark::Bookmark {
+        id: row.get(0)?,
+        article_title: row.get(1)?,
+        folder_id: row.get(2)?,
+        note: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
 fn vec_f32_to_blob(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
     for x in v {
@@ -1510,5 +1766,102 @@ mod tests {
         // exists only under model-a.
         let hits = store.top_k_by_cosine("model-b", &[1.0, 0.0], 5).unwrap();
         assert!(hits.is_empty());
+    }
+
+    // --- Bookmark tests ---------------------------------------------------
+
+    #[test]
+    fn add_bookmark_round_trips() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let id = store
+            .add_bookmark("Photon", None, Some("worth re-reading"))
+            .unwrap();
+        assert!(id > 0);
+        assert!(store.is_bookmarked("Photon").unwrap());
+        assert!(!store.is_bookmarked("Electron").unwrap());
+        assert_eq!(store.count_bookmarks().unwrap(), 1);
+    }
+
+    #[test]
+    fn add_bookmark_is_idempotent() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let a = store.add_bookmark("Photon", None, None).unwrap();
+        let b = store.add_bookmark("Photon", None, None).unwrap();
+        assert_eq!(a, b, "duplicate add must return existing id, not insert");
+        assert_eq!(store.count_bookmarks().unwrap(), 1);
+    }
+
+    #[test]
+    fn bookmark_in_different_folders_is_distinct() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let f1 = store.create_folder("Physics", None).unwrap();
+        let f2 = store.create_folder("Reading list", None).unwrap();
+        let a = store.add_bookmark("Photon", Some(f1), None).unwrap();
+        let b = store.add_bookmark("Photon", Some(f2), None).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(store.count_bookmarks().unwrap(), 2);
+    }
+
+    #[test]
+    fn remove_bookmark_unfiles_or_drops() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let id = store.add_bookmark("Photon", None, None).unwrap();
+        store.remove_bookmark(id).unwrap();
+        assert!(!store.is_bookmarked("Photon").unwrap());
+        // Idempotent — removing a missing id is fine.
+        store.remove_bookmark(id).unwrap();
+        store.remove_bookmark(99999).unwrap();
+    }
+
+    #[test]
+    fn move_bookmark_between_folders() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let f1 = store.create_folder("F1", None).unwrap();
+        let f2 = store.create_folder("F2", None).unwrap();
+        let id = store.add_bookmark("Photon", Some(f1), None).unwrap();
+        store.move_bookmark(id, Some(f2)).unwrap();
+        assert_eq!(store.bookmarks_in_folder(Some(f1), 100).unwrap().len(), 0);
+        assert_eq!(store.bookmarks_in_folder(Some(f2), 100).unwrap().len(), 1);
+        // Move to root.
+        store.move_bookmark(id, None).unwrap();
+        assert_eq!(store.bookmarks_in_folder(None, 100).unwrap().len(), 1);
+        assert_eq!(store.bookmarks_in_folder(Some(f2), 100).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn delete_folder_unfiles_its_bookmarks() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let f = store.create_folder("Doomed", None).unwrap();
+        store.add_bookmark("Photon", Some(f), None).unwrap();
+        store.add_bookmark("Electron", Some(f), None).unwrap();
+        store.delete_folder(f).unwrap();
+        // Folder is gone, but the bookmarks live on at root (folder_id = NULL).
+        assert_eq!(store.list_folders().unwrap().len(), 0);
+        assert_eq!(store.bookmarks_in_folder(None, 100).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rename_folder() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let f = store.create_folder("Old", None).unwrap();
+        store.rename_folder(f, "New").unwrap();
+        let folders = store.list_folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "New");
+    }
+
+    #[test]
+    fn list_folders_orders_by_name_case_insensitive() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.create_folder("zebra", None).unwrap();
+        store.create_folder("Alpha", None).unwrap();
+        store.create_folder("middle", None).unwrap();
+        let names: Vec<String> = store
+            .list_folders()
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(names, vec!["Alpha", "middle", "zebra"]);
     }
 }

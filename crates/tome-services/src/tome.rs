@@ -513,6 +513,61 @@ impl Tome {
         self.save_settings(|s| s.history_enabled = enabled)
     }
 
+    // --- Bookmarks ---------------------------------------------------------
+
+    pub fn add_bookmark(
+        &self,
+        article_title: &str,
+        folder_id: Option<i64>,
+        note: Option<&str>,
+    ) -> Result<i64> {
+        self.storage.add_bookmark(article_title, folder_id, note)
+    }
+
+    pub fn remove_bookmark(&self, id: i64) -> Result<()> {
+        self.storage.remove_bookmark(id)
+    }
+
+    pub fn move_bookmark(&self, id: i64, folder_id: Option<i64>) -> Result<()> {
+        self.storage.move_bookmark(id, folder_id)
+    }
+
+    pub fn is_bookmarked(&self, article_title: &str) -> Result<bool> {
+        self.storage.is_bookmarked(article_title)
+    }
+
+    pub fn bookmarks_in_folder(
+        &self,
+        folder_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<tome_storage::Bookmark>> {
+        self.storage.bookmarks_in_folder(folder_id, limit)
+    }
+
+    pub fn all_bookmarks(&self, limit: u32) -> Result<Vec<tome_storage::Bookmark>> {
+        self.storage.all_bookmarks(limit)
+    }
+
+    pub fn count_bookmarks(&self) -> Result<u64> {
+        self.storage.count_bookmarks()
+    }
+
+    pub fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<i64> {
+        self.storage.create_folder(name, parent_id)
+    }
+
+    pub fn rename_folder(&self, id: i64, new_name: &str) -> Result<()> {
+        self.storage.rename_folder(id, new_name)
+    }
+
+    pub fn delete_folder(&self, id: i64) -> Result<()> {
+        self.storage.delete_folder(id)
+    }
+
+    pub fn list_folders(&self) -> Result<Vec<tome_storage::BookmarkFolder>> {
+        self.storage.list_folders()
+    }
+
     /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)
     /// and upsert every entry as Cold-tier metadata. The full index is
     /// ~6.5M lines for English Wikipedia; this typically completes in 30-90s

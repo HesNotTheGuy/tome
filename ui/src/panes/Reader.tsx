@@ -8,6 +8,7 @@ import {
   Revision,
 } from "../types";
 import AskTome from "../components/AskTome";
+import BookmarkButton from "../components/BookmarkButton";
 import Timeline from "../components/Timeline";
 
 interface ReaderProps {
@@ -194,18 +195,21 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
           )}
           {geotag && <CoordsBadge geotag={geotag} />}
         </div>
-        <button
-          type="button"
-          onClick={loadRevisions}
-          disabled={!isTauri() || revLoading}
-          className="text-xs px-2 py-1 rounded border border-tome-border hover:bg-tome-surface-2 text-tome-muted disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {revLoading
-            ? "Loading…"
-            : revisions
-              ? `Revisions · ${revisions.length}`
-              : "Show revisions"}
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <BookmarkButton articleTitle={response?.title ?? title ?? ""} />
+          <button
+            type="button"
+            onClick={loadRevisions}
+            disabled={!isTauri() || revLoading}
+            className="text-xs px-2 py-1 rounded border border-tome-border hover:bg-tome-surface-2 text-tome-muted disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {revLoading
+              ? "Loading…"
+              : revisions
+                ? `Revisions · ${revisions.length}`
+                : "Show revisions"}
+          </button>
+        </div>
       </div>
 
       {loading && (
