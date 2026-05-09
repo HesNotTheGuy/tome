@@ -13,6 +13,37 @@ Offline Wikipedia, with control. Tome reads Wikipedia's official multistream XML
 - **Updates** — refresh changed articles incrementally from the live API on demand or on a schedule.
 - **Offline-first** — once content is downloaded, no internet required.
 
+## Compatibility
+
+### Operating systems
+
+| OS | Status |
+|---|---|
+| **Windows 10 / 11 (x64)** | Tested. Primary target. WebView2 runtime auto-installs if absent. |
+| **Windows 11 ARM** | Untested. Source build expected to work; not in CI. |
+| **macOS (Apple Silicon, arm64)** | Built by CI, untested in practice. DMG published per release. |
+| **macOS (Intel, x64)** | Built by CI, untested in practice. |
+| **Linux x64** (Ubuntu 22.04+) | Built by CI, untested in practice. `.deb` and `AppImage` published. Needs `webkit2gtk-4.1` from your package manager. |
+| **Linux ARM, BSDs, others** | Source-only — not in CI. |
+| **iOS / Android** | Not supported. Tauri 2 has mobile in beta but Tome hasn't been adapted for it. |
+
+### Hardware
+
+| Component | Requirement |
+|---|---|
+| CPU | x86_64 with AVX. Pre-2011 CPUs lacking AVX won't run AI features but reader / search / map all work fine. |
+| RAM | 4 GB minimum for reader-only. 8 GB if semantic search is enabled. 16 GB for the chat model. |
+| Disk (app) | ~80 MB |
+| Disk (your data) | 1 GB (Simple English) up to 30 GB (full English Wikipedia + AI models). Optional offline map files can add anywhere from 100 MB to 100 GB depending on coverage. |
+| GPU | None required. Tome runs all AI on CPU by default; Metal / CUDA / Vulkan are auto-used if present. |
+
+### Known conflicts and caveats
+
+- **Antivirus false positives** on alpha builds. Until we have a code-signing certificate, Windows SmartScreen, Defender, and some third-party AVs will flag the installer as "unrecognized." Click "More info → Run anyway" to proceed. Same for macOS Gatekeeper: right-click the app and choose "Open" the first time.
+- **Mac App Store / Microsoft Store distribution is incompatible with GPL-3.0** ([reasons](https://www.gnu.org/licenses/gpl-faq.html#AppStore)). Tome will only ever be distributed by direct download.
+- **WebView differences** — Tome runs in WebView2 (Win), WKWebView (mac), and WebKitGTK (Linux). Subtle CSS/JS rendering differences exist; we don't currently test all three matrices.
+- **Strictly offline once configured.** Tome talks to the network only for: live Wikipedia article HTML when an article isn't in your local dump, MediaWiki revision metadata when you open the timeline, and (if you opt in) HuggingFace for one-time model downloads. The Map pane has no online fallback at all — if you don't supply an offline `.pmtiles`, you see pins on a blank background.
+
 ## Building
 
 You'll need:
