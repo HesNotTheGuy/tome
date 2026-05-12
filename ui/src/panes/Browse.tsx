@@ -70,8 +70,33 @@ export default function Browse({ onOpen }: BrowseProps) {
 function CategorySearch({ onPick }: { onPick: (cat: string) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[]>([]);
+  const [topLevel, setTopLevel] = useState<string[]>([]);
+  const [topLevelLoaded, setTopLevelLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Load Wikipedia's own top-level taxonomy as a landing surface.
+  // Main_topic_classifications is the root of Wikipedia's category
+  // tree and contains the ~30 broadest subject buckets (Mathematics,
+  // History, Science, etc). Using Wikipedia's own curation avoids us
+  // making editorial choices about what to feature.
+  useEffect(() => {
+    if (!isTauri()) {
+      setTopLevelLoaded(true);
+      return;
+    }
+    tome
+      .categoryMembers("Main topic classifications", "subcat", 100)
+      .then((members) => {
+        setTopLevel(members.map((m) => m.title));
+      })
+      .catch(() => {
+        // Categorylinks not ingested, or this category isn't present
+        // in the local data — fall back to an empty landing.
+        setTopLevel([]);
+      })
+      .finally(() => setTopLevelLoaded(true));
+  }, []);
 
   useEffect(() => {
     if (!isTauri() || query.trim().length < 2) {
@@ -102,6 +127,8 @@ function CategorySearch({ onPick }: { onPick: (cat: string) => void }) {
     };
   }, [query]);
 
+  const showingSearch = query.trim().length >= 2;
+
   return (
     <div>
       <input
@@ -119,33 +146,73 @@ function CategorySearch({ onPick }: { onPick: (cat: string) => void }) {
         </div>
       )}
 
-      {loading && (
-        <div className="text-xs text-tome-muted">Searching…</div>
+      {/* Search results pane (shown only with 2+ chars typed). */}
+      {showingSearch && (
+        <>
+          {loading && <div className="text-xs text-tome-muted">Searching…</div>}
+
+          {!loading && results.length === 0 && !error && (
+            <div className="text-sm text-tome-muted py-3">
+              No categories match.
+            </div>
+          )}
+
+          <ul className="divide-y divide-tome-border rounded border border-tome-border overflow-hidden">
+            {results.map((c) => (
+              <li
+                key={c}
+                onClick={() => onPick(c)}
+                className="p-3 hover:bg-tome-surface-2 cursor-pointer flex items-center justify-between"
+              >
+                <span className="text-sm">{c}</span>
+                <span className="text-xs text-tome-muted">→</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
-      {!loading && query.trim().length >= 2 && results.length === 0 && !error && (
-        <div className="text-sm text-tome-muted py-3">
-          No categories match.
-        </div>
-      )}
-
-      <ul className="divide-y divide-tome-border rounded border border-tome-border overflow-hidden">
-        {results.map((c) => (
-          <li
-            key={c}
-            onClick={() => onPick(c)}
-            className="p-3 hover:bg-tome-surface-2 cursor-pointer flex items-center justify-between"
-          >
-            <span className="text-sm">{c}</span>
-            <span className="text-xs text-tome-muted">→</span>
-          </li>
-        ))}
-      </ul>
-
-      {query.trim().length < 2 && (
-        <div className="p-6 text-center text-sm text-tome-muted">
-          Type at least 2 characters to search.
-        </div>
+      {/* Landing surface (shown when search is empty). */}
+      {!showingSearch && (
+        <>
+          <div className="mb-3 text-xs uppercase tracking-wide text-tome-muted">
+            Wikipedia&apos;s top-level categories
+          </div>
+          {!topLevelLoaded && (
+            <div className="text-xs text-tome-muted">Loading…</div>
+          )}
+          {topLevelLoaded && topLevel.length === 0 && (
+            <div className="p-6 rounded border border-dashed border-tome-border text-center text-sm text-tome-muted">
+              No top-level categories found. Ingest a recent
+              <code className="mx-1 text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+                *-categorylinks.sql.gz
+              </code>
+              to populate this view, or type at least 2 characters above
+              to search by name.
+            </div>
+          )}
+          {topLevel.length > 0 && (
+            <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
+              {topLevel.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onPick(c)}
+                  className="p-3 text-left rounded border border-tome-border bg-tome-surface hover:bg-tome-surface-2 transition-colors"
+                >
+                  <span className="text-sm">{c}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-4 text-xs text-tome-muted">
+            These come from Wikipedia&apos;s own{" "}
+            <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
+              Main_topic_classifications
+            </code>{" "}
+            category — Wikipedia&apos;s editorial picks, not ours.
+          </p>
+        </>
       )}
     </div>
   );
