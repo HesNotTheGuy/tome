@@ -956,6 +956,26 @@ impl Tome {
         chat_download::is_present(&self.chat_config())
     }
 
+    /// Approximate size of the chat model download in bytes. Used as
+    /// the `bytes_required` input to disk-space checks. We don't know
+    /// the exact byte count without an HTTP HEAD, so this is the
+    /// publicly-documented Q4_K_M size rounded slightly up — a real
+    /// download might land a few MB short, but never significantly over.
+    pub const CHAT_MODEL_BYTES: u64 = 2_400_000_000;
+
+    /// Approximate size of the embedding model download in bytes.
+    /// BGE-small-en-v1.5 in float32 ONNX format.
+    pub const EMBEDDING_MODEL_BYTES: u64 = 33_500_000;
+
+    /// Disk-space pre-flight against the chat model's cache directory.
+    /// Returns the projected free space after a chat-model-sized
+    /// download so the UI can warn before kicking off the transfer.
+    pub fn check_disk_space_for_chat_model(&self) -> Result<tome_core::DiskSpaceCheck> {
+        let path = self.chat_config().cache_dir;
+        tome_core::check_disk_space(&path, Self::CHAT_MODEL_BYTES)
+            .map_err(|e| TomeError::Other(format!("check disk space: {e}")))
+    }
+
     /// Async download of the chat model from HuggingFace. Long-running:
     /// the file is ~2.3 GB, so the caller should run this on a worker
     /// thread and surface progress to the UI. Re-running on a partial

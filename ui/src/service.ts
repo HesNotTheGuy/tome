@@ -15,6 +15,7 @@ import {
   CategoryMember,
   CategoryMemberKind,
   ChatAnswer,
+  DiskSpaceCheck,
   EmbeddingHit,
   EmbeddingIngestSummary,
   HistoryEntry,
@@ -93,6 +94,7 @@ export interface TomeService {
   countEmbeddings(): Promise<number>;
   semanticSearch(query: string, k: number): Promise<EmbeddingHit[]>;
   chatModelPresent(): Promise<boolean>;
+  checkDiskSpaceForChatModel(): Promise<DiskSpaceCheck>;
   downloadChatModel(onProgress: (bytes: number) => void): Promise<string>;
   askTome(question: string): Promise<ChatAnswer>;
   ingestGeotags(
@@ -267,6 +269,9 @@ export const tome: TomeService = {
   },
   chatModelPresent() {
     return invoke<boolean>("chat_model_present");
+  },
+  checkDiskSpaceForChatModel() {
+    return invoke<DiskSpaceCheck>("check_disk_space_for_chat_model");
   },
   async downloadChatModel(onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

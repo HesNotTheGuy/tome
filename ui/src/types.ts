@@ -136,6 +136,15 @@ export interface BookmarkFolder {
   created_at: number;
 }
 
+export interface DiskSpaceCheck {
+  free_bytes: number;
+  total_bytes: number;
+  required_bytes: number;
+  free_after_download_pct: number;
+  recommended_min_pct: number;
+  warn: boolean;
+}
+
 export interface GeotagSummary {
   entries_processed: number;
   elapsed_ms: number;

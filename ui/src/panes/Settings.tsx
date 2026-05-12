@@ -966,11 +966,12 @@ function SemanticSearchSection() {
 
 function ChatModelSection() {
   const [present, setPresent] = useState<boolean | null>(null);
-  const [phase, setPhase] = useState<"idle" | "downloading" | "done" | "error">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "checking" | "warning" | "downloading" | "done" | "error"
+  >("idle");
   const [bytes, setBytes] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [diskCheck, setDiskCheck] = useState<import("../types").DiskSpaceCheck | null>(null);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -980,11 +981,34 @@ function ChatModelSection() {
       .catch(() => setPresent(null));
   }, []);
 
-  async function handleDownload() {
+  // Pre-flight: run the disk-space check, surface a warning modal if
+  // it would leave the volume below the 15% threshold. Warn-only —
+  // user can always click through.
+  async function handleClickDownload() {
+    if (!isTauri()) return;
+    setPhase("checking");
+    setError(null);
+    try {
+      const check = await tome.checkDiskSpaceForChatModel();
+      setDiskCheck(check);
+      if (check.warn) {
+        setPhase("warning");
+      } else {
+        await startDownload();
+      }
+    } catch (e) {
+      // If the check itself fails (rare — needs a real I/O fault),
+      // fall through to the download. We'd rather attempt and fail
+      // gracefully than block on a flaky stat call.
+      setError(`disk check failed, continuing anyway: ${e}`);
+      await startDownload();
+    }
+  }
+
+  async function startDownload() {
     if (!isTauri()) return;
     setPhase("downloading");
     setBytes(0);
-    setError(null);
     try {
       await tome.downloadChatModel((n) => setBytes(n));
       setPhase("done");
@@ -1017,18 +1041,25 @@ function ChatModelSection() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={handleDownload}
-            disabled={phase === "downloading" || present === true || !isTauri()}
+            onClick={handleClickDownload}
+            disabled={
+              phase === "downloading" ||
+              phase === "checking" ||
+              present === true ||
+              !isTauri()
+            }
             className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ backgroundColor: "var(--tome-accent)" }}
           >
-            {phase === "downloading"
-              ? bytes > 0
-                ? `Downloading… ${(bytes / (1024 * 1024)).toFixed(1)} MB`
-                : "Downloading…"
-              : present
-                ? "Already on disk"
-                : "Download"}
+            {phase === "checking"
+              ? "Checking…"
+              : phase === "downloading"
+                ? bytes > 0
+                  ? `Downloading… ${(bytes / (1024 * 1024)).toFixed(1)} MB`
+                  : "Downloading…"
+                : present
+                  ? "Already on disk"
+                  : "Download"}
           </button>
           {phase === "error" && error && (
             <span className="text-xs text-tome-danger">{error}</span>
@@ -1038,11 +1069,93 @@ function ChatModelSection() {
       <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
         One-time download from HuggingFace. Once on disk, &quot;Ask Tome&quot;
         in the Reader will answer questions with citations to source
-        articles — fully offline, no cloud calls. The chat backend itself
-        ships in a follow-up commit; this lets you start the download
-        ahead of time.
+        articles — fully offline, no cloud calls. We run a quick
+        disk-space check before starting and warn if the download would
+        leave your drive uncomfortably full.
       </div>
+
+      {phase === "warning" && diskCheck && (
+        <DiskSpaceWarning
+          check={diskCheck}
+          onCancel={() => setPhase("idle")}
+          onContinue={() => {
+            setPhase("idle");
+            startDownload();
+          }}
+        />
+      )}
     </Section>
+  );
+}
+
+function DiskSpaceWarning({
+  check,
+  onCancel,
+  onContinue,
+}: {
+  check: import("../types").DiskSpaceCheck;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  const freeGB = (check.free_bytes / 1e9).toFixed(1);
+  const totalGB = (check.total_bytes / 1e9).toFixed(0);
+  const requiredGB = (check.required_bytes / 1e9).toFixed(1);
+  const wontFit = check.free_bytes < check.required_bytes;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="w-full max-w-md mx-4 rounded-lg border border-tome-border bg-tome-surface shadow-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-tome-border">
+          <h3 className="text-lg font-bold">
+            {wontFit ? "Not enough space" : "Drive will be tight"}
+          </h3>
+        </div>
+        <div className="px-5 py-4 text-sm space-y-2">
+          <p>
+            Downloading this would use{" "}
+            <span className="font-mono">{requiredGB} GB</span>, leaving{" "}
+            <span
+              className={
+                "font-mono " +
+                (wontFit ? "text-tome-danger" : "text-tome-text")
+              }
+            >
+              {check.free_after_download_pct.toFixed(1)}%
+            </span>{" "}
+            free on a{" "}
+            <span className="font-mono">{totalGB} GB</span> drive.
+          </p>
+          <p className="text-xs text-tome-muted">
+            You have <span className="font-mono">{freeGB} GB</span> free
+            right now. Most operating systems prefer at least{" "}
+            <span className="font-mono">{check.recommended_min_pct}%</span>{" "}
+            free for stable performance.
+          </p>
+          {wontFit && (
+            <p className="text-xs text-tome-danger">
+              Continuing will likely fail partway through; consider freeing
+              space first.
+            </p>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-tome-border flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            className="px-3 py-1.5 text-sm rounded text-white"
+            style={{ backgroundColor: "var(--tome-accent)" }}
+          >
+            Download anyway
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -1499,6 +1499,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs4"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
+dependencies = [
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "futf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5459,7 +5469,7 @@ dependencies = [
  "downcast-rs",
  "fastdivide",
  "fnv",
- "fs4",
+ "fs4 0.8.4",
  "htmlescape",
  "itertools 0.12.1",
  "levenshtein_automata",
@@ -6199,6 +6209,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
+ "fs4 1.1.0",
  "serde",
  "serde_json",
  "tempfile",

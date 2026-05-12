@@ -14,6 +14,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 dirs = { workspace = true }
+# Pure-Rust cross-platform `statvfs`-equivalent. Used by the disk-space
+# pre-flight check before multi-GB downloads. Tiny dep, no C deps.
+fs4 = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

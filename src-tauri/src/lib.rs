@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tome_api::{ClientConfig, KillSwitch, MediaWikiClient, ReqwestTransport, Revision};
-use tome_core::{SearchHit, Tier, Title};
+use tome_core::{DiskSpaceCheck, SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{
@@ -107,6 +107,7 @@ pub fn run() {
             count_embeddings,
             semantic_search,
             chat_model_present,
+            check_disk_space_for_chat_model,
             download_chat_model,
             ask_tome,
             health_check,
@@ -502,6 +503,13 @@ async fn semantic_search(
 #[tauri::command]
 fn chat_model_present(state: State<'_, Arc<Tome>>) -> bool {
     state.chat_model_present()
+}
+
+#[tauri::command]
+fn check_disk_space_for_chat_model(state: State<'_, Arc<Tome>>) -> Result<DiskSpaceCheck, String> {
+    state
+        .check_disk_space_for_chat_model()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
