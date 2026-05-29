@@ -113,14 +113,18 @@ mod chat_impl {
             on_progress(final_size);
         });
 
-        let path = repo
-            .get(&config.model_file)
-            .await
-            .map_err(|e| TomeError::Other(format!("download {}: {e}", config.model_file)))?;
+        let download_result = repo.get(&config.model_file).await;
 
-        // Stop the polling task and wait for its final progress emission.
+        // Stop the polling task and await its final emission on BOTH the
+        // success and error paths — capture the result first, tear the
+        // task down deterministically, then propagate. Using `?` directly
+        // on repo.get() would skip this teardown on error and leave the
+        // poller to terminate only via cancel_tx's drop (one stray stat).
         let _ = cancel_tx.send(());
         let _ = progress_handle.await;
+
+        let path = download_result
+            .map_err(|e| TomeError::Other(format!("download {}: {e}", config.model_file)))?;
 
         // Move the cached file to the deterministic path we promised
         // callers via `expected_path`. hf-hub returns its own internal

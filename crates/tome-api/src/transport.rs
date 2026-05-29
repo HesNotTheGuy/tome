@@ -53,8 +53,13 @@ impl HttpResponse {
         (200..300).contains(&self.status)
     }
 
+    /// Whether a non-success status is worth retrying. Retryable:
+    /// 408 Request Timeout, 425 Too Early, 429 Too Many Requests, and any
+    /// 5xx server error. Every other 4xx is a client error (bad title,
+    /// missing page, forbidden) — retrying won't change the outcome, so
+    /// the caller should fail fast rather than burn the retry budget.
     pub fn is_retryable(&self) -> bool {
-        self.status >= 400
+        matches!(self.status, 408 | 425 | 429) || self.status >= 500
     }
 }
 
@@ -143,12 +148,26 @@ mod tests {
         assert!(!server_err.is_success());
         assert!(server_err.is_retryable());
 
-        let client_err = HttpResponse {
+        let throttled = HttpResponse {
             status: 429,
             headers: vec![],
             body: vec![],
         };
-        assert!(!client_err.is_success());
-        assert!(client_err.is_retryable());
+        assert!(!throttled.is_success());
+        assert!(throttled.is_retryable());
+
+        // A 404 / 400 is a client error — not worth retrying.
+        for status in [400, 401, 403, 404] {
+            let client_err = HttpResponse {
+                status,
+                headers: vec![],
+                body: vec![],
+            };
+            assert!(!client_err.is_success());
+            assert!(
+                !client_err.is_retryable(),
+                "status {status} should not be retryable"
+            );
+        }
     }
 }

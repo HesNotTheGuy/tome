@@ -159,6 +159,15 @@ impl MediaWikiClient {
                         status: Some(status),
                         error: Some(format!("status {status}")),
                     });
+                    // Client errors (404 missing page, 400 bad title, 403
+                    // forbidden) won't succeed on retry and aren't an
+                    // endpoint-health signal — fail fast without burning the
+                    // retry budget (~63s of backoff) or counting toward the
+                    // circuit breaker, which would spuriously block traffic
+                    // when a user simply reads articles that don't exist.
+                    if !response.is_retryable() {
+                        return Err(TomeError::Api(format!("status {status}")));
+                    }
                     self.breaker.record_error();
                     if self.breaker.is_open() {
                         return Err(TomeError::CircuitBreakerOpen);

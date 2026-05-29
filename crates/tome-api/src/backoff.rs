@@ -2,9 +2,17 @@
 //!
 //! Sequence: 1s, 2s, 4s, 8s, 16s, 32s, then 60s for any further attempts.
 //! When the server provides a `Retry-After` header, it overrides the
-//! schedule and the delay is honored exactly (no cap, no exponentiation).
+//! schedule — but is clamped to [`MAX_RETRY_AFTER`] so a hostile or
+//! misconfigured server can't park an in-flight request for hours.
 
 use tokio::time::Duration;
+
+/// Upper bound on a server-supplied `Retry-After` delay. The HTTP spec
+/// lets a server name any wait, and a `Retry-After: 86400` would
+/// otherwise hang a request for 24 hours. Five minutes is well beyond
+/// any legitimate transient-throttle and keeps us a polite client
+/// without handing the server a denial-of-service lever over us.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Default)]
 pub struct BackoffState {
@@ -32,7 +40,10 @@ impl BackoffState {
     /// `Retry-After` value from the server. Call after `record_failure`.
     pub fn next_delay(&self, retry_after: Option<Duration>) -> Duration {
         if let Some(d) = retry_after {
-            return d;
+            // Honor the server's request, but never park longer than
+            // MAX_RETRY_AFTER — a misconfigured or hostile server could
+            // otherwise hang the request for hours.
+            return d.min(MAX_RETRY_AFTER);
         }
         let secs = match self.attempts {
             0 | 1 => 1,
@@ -76,13 +87,25 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_is_not_capped() {
-        // Spec: "wait exactly the requested duration" — no cap.
+    fn retry_after_under_cap_is_honored_exactly() {
+        // A reasonable throttle is passed through unchanged.
+        let mut b = BackoffState::new();
+        b.record_failure();
+        assert_eq!(
+            b.next_delay(Some(Duration::from_secs(17))),
+            Duration::from_secs(17)
+        );
+    }
+
+    #[test]
+    fn retry_after_over_cap_is_clamped() {
+        // A hostile/misconfigured `Retry-After: 3600` is clamped to the
+        // 5-minute ceiling so it can't park the request for an hour.
         let mut b = BackoffState::new();
         b.record_failure();
         assert_eq!(
             b.next_delay(Some(Duration::from_secs(3600))),
-            Duration::from_secs(3600)
+            MAX_RETRY_AFTER
         );
     }
 
