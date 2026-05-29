@@ -16,7 +16,7 @@
 //! escape sequences, `NULL` literals, integers, and floats.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use flate2::read::GzDecoder;
@@ -25,14 +25,30 @@ use tome_storage::Geotag;
 
 const INSERT_PREFIX: &str = "INSERT INTO `geo_tags` VALUES ";
 
-pub fn parse_file<F: FnMut(Geotag)>(path: &Path, on_geotag: F) -> Result<u64> {
+pub fn parse_file<F: FnMut(Geotag)>(path: &Path, mut on_geotag: F) -> Result<u64> {
     let file = File::open(path)
         .map_err(|e| TomeError::Other(format!("open geotag dump {path:?}: {e}")))?;
-    let mut gz = GzDecoder::new(file);
-    let mut content = String::new();
-    gz.read_to_string(&mut content)
-        .map_err(|e| TomeError::Other(format!("decompress geotag dump: {e}")))?;
-    parse_str(&content, on_geotag)
+    // Stream line-by-line rather than decompressing the entire dump into one
+    // String. Wikipedia SQL dumps write one `INSERT INTO ... VALUES (...),
+    // (...);` per line (newlines inside string values are escaped as `\n`),
+    // so each line is a complete, self-contained parse unit. This caps the
+    // working set at the largest single INSERT line (~1 MB) instead of the
+    // full decompressed file — the prior read_to_string could OOM low-RAM
+    // machines on a large dump.
+    let mut reader = BufReader::new(GzDecoder::new(file));
+    let mut line = String::new();
+    let mut count = 0_u64;
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| TomeError::Other(format!("decompress geotag dump: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        count += parse_str(&line, &mut on_geotag)?;
+    }
+    Ok(count)
 }
 
 pub fn parse_str<F: FnMut(Geotag)>(content: &str, mut on_geotag: F) -> Result<u64> {

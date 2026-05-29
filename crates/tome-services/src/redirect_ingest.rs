@@ -15,7 +15,7 @@
 //! `category_ingest`; only the column projection and filter differ.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use flate2::read::GzDecoder;
@@ -24,14 +24,30 @@ use tome_storage::Redirect;
 
 const INSERT_PREFIX: &str = "INSERT INTO `redirect` VALUES ";
 
-pub fn parse_file<F: FnMut(Redirect)>(path: &Path, on_redirect: F) -> Result<u64> {
+pub fn parse_file<F: FnMut(Redirect)>(path: &Path, mut on_redirect: F) -> Result<u64> {
     let file = File::open(path)
         .map_err(|e| TomeError::Other(format!("open redirect dump {path:?}: {e}")))?;
-    let mut gz = GzDecoder::new(file);
-    let mut content = String::new();
-    gz.read_to_string(&mut content)
-        .map_err(|e| TomeError::Other(format!("decompress redirect dump: {e}")))?;
-    parse_str(&content, on_redirect)
+    // Stream line-by-line rather than decompressing the entire dump into one
+    // String. Wikipedia SQL dumps write one `INSERT INTO ... VALUES (...),
+    // (...);` per line (newlines inside string values are escaped as `\n`),
+    // so each line is a complete, self-contained parse unit. This caps the
+    // working set at the largest single INSERT line (~1 MB) instead of the
+    // full decompressed file (hundreds of MB for enwiki) — the prior
+    // read_to_string could OOM low-RAM machines on a full-enwiki dump.
+    let mut reader = BufReader::new(GzDecoder::new(file));
+    let mut line = String::new();
+    let mut count = 0_u64;
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| TomeError::Other(format!("decompress redirect dump: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        count += parse_str(&line, &mut on_redirect)?;
+    }
+    Ok(count)
 }
 
 pub fn parse_str<F: FnMut(Redirect)>(content: &str, mut on_redirect: F) -> Result<u64> {
