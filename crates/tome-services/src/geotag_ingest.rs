@@ -16,7 +16,7 @@
 //! escape sequences, `NULL` literals, integers, and floats.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use flate2::read::GzDecoder;
@@ -25,67 +25,139 @@ use tome_storage::Geotag;
 
 const INSERT_PREFIX: &str = "INSERT INTO `geo_tags` VALUES ";
 
+/// Decompressed bytes pulled from the gzip stream per read.
+const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
+
 pub fn parse_file<F: FnMut(Geotag)>(path: &Path, mut on_geotag: F) -> Result<u64> {
     let file = File::open(path)
         .map_err(|e| TomeError::Other(format!("open geotag dump {path:?}: {e}")))?;
-    // Stream line-by-line rather than decompressing the entire dump into one
-    // String. Wikipedia SQL dumps write one `INSERT INTO ... VALUES (...),
-    // (...);` per line (newlines inside string values are escaped as `\n`),
-    // so each line is a complete, self-contained parse unit. This caps the
-    // working set at the largest single INSERT line (~1 MB) instead of the
-    // full decompressed file — the prior read_to_string could OOM low-RAM
-    // machines on a large dump.
-    let mut reader = BufReader::new(GzDecoder::new(file));
-    let mut line = String::new();
+    // Stream the gzip in bounded chunks instead of decompressing the whole
+    // dump into one String. `pending` holds only the unparsed tail — at most
+    // one in-flight INSERT statement — so resident memory is independent of
+    // dump size. An INSERT statement or tuple that straddles a chunk boundary
+    // stays in `pending` and is completed once the next chunk is read, so we
+    // don't rely on the dump being newline-framed.
+    let mut decoder = GzDecoder::new(BufReader::new(file));
+    let mut chunk = vec![0_u8; CHUNK_SIZE];
+    let mut pending: Vec<u8> = Vec::new();
     let mut count = 0_u64;
     loop {
-        line.clear();
-        let n = reader
-            .read_line(&mut line)
+        let n = decoder
+            .read(&mut chunk)
             .map_err(|e| TomeError::Other(format!("decompress geotag dump: {e}")))?;
         if n == 0 {
+            // Clean EOF: flush the remainder, allowing a final statement that
+            // isn't terminated by a trailing newline.
+            count += parse_buf(&pending, true, &mut on_geotag).0;
             break;
         }
-        count += parse_str(&line, &mut on_geotag)?;
+        pending.extend_from_slice(&chunk[..n]);
+        let (parsed, consumed) = parse_buf(&pending, false, &mut on_geotag);
+        count += parsed;
+        pending.drain(..consumed);
     }
     Ok(count)
 }
 
+/// Parse a complete, in-memory SQL string. Retained for the unit tests that
+/// feed small `&str` fixtures; `parse_file` drives the same core incrementally
+/// via [`parse_buf`].
 pub fn parse_str<F: FnMut(Geotag)>(content: &str, mut on_geotag: F) -> Result<u64> {
-    let mut count: u64 = 0;
-    for (pos, _) in content.match_indices(INSERT_PREFIX) {
-        let after = &content[pos + INSERT_PREFIX.len()..];
-        let bytes = after.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() && bytes[i] != b';' {
-            // Skip to next '('
-            while i < bytes.len() && bytes[i] != b'(' && bytes[i] != b';' {
+    Ok(parse_buf(content.as_bytes(), true, &mut on_geotag).0)
+}
+
+/// Parse every complete `INSERT INTO ... VALUES (...);` statement present in
+/// `buf`, invoking `on_geotag` for each row.
+///
+/// Returns `(rows_emitted, consumed)`, where `consumed` is the number of
+/// leading bytes that are fully processed and may be discarded. Bytes from
+/// `consumed` onward are an incomplete trailing unit — a partial INSERT
+/// prefix, or a statement whose terminating `;` hasn't arrived — that the
+/// caller must retain and re-parse once more data is read. The rows of an
+/// incomplete trailing statement are buffered and only emitted once it is seen
+/// whole, so nothing is double counted across chunk boundaries.
+///
+/// When `eof` is true no more data follows, so the whole buffer is consumed and
+/// a final unterminated statement is flushed on a best-effort basis.
+fn parse_buf<F: FnMut(Geotag)>(buf: &[u8], eof: bool, on_geotag: &mut F) -> (u64, usize) {
+    let prefix = INSERT_PREFIX.as_bytes();
+    let mut count = 0_u64;
+    let mut pos = 0;
+    loop {
+        let Some(rel) = find_subslice(&buf[pos..], prefix) else {
+            // No further prefix. Retain a possible partial prefix at the tail
+            // so a prefix split across the boundary still matches next time.
+            let keep = if eof { 0 } else { prefix_tail_overlap(buf, prefix) };
+            return (count, buf.len() - keep);
+        };
+        let stmt_start = pos + rel;
+        let mut i = stmt_start + prefix.len();
+        // Buffer this statement's rows; only emit once we reach its `;` (or
+        // EOF). A statement straddling the boundary is then retained intact
+        // rather than half-emitted and re-emitted on the next chunk.
+        let mut rows: Vec<Geotag> = Vec::new();
+        let stmt_end = loop {
+            while i < buf.len() && buf[i] != b'(' && buf[i] != b';' {
                 i += 1;
             }
-            if i >= bytes.len() || bytes[i] == b';' {
-                break;
+            if i >= buf.len() {
+                if eof {
+                    break buf.len();
+                }
+                return (count, stmt_start);
+            }
+            if buf[i] == b';' {
+                break i + 1;
             }
             i += 1; // consume '('
-            let (fields, advance) = parse_tuple(&after[i..])?;
+            let Some((fields, advance)) = parse_tuple(&buf[i..]) else {
+                // The tuple's closing `)` hasn't arrived yet.
+                if eof {
+                    break buf.len();
+                }
+                return (count, stmt_start);
+            };
             i += advance;
             if let Some(g) = fields_to_geotag(&fields) {
-                on_geotag(g);
-                count += 1;
+                rows.push(g);
             }
+        };
+        for g in rows {
+            on_geotag(g);
+            count += 1;
         }
+        pos = stmt_end;
     }
-    Ok(count)
 }
 
-fn parse_tuple(input: &str) -> Result<(Vec<String>, usize)> {
-    let bytes = input.as_bytes();
+/// Index of the first occurrence of `needle` in `haystack` (`needle` is the
+/// non-empty INSERT prefix).
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Length of the longest suffix of `buf` that is a prefix of `needle` (capped
+/// at `needle.len() - 1`): the partial INSERT prefix that may complete once the
+/// next chunk is appended, so it must be kept.
+fn prefix_tail_overlap(buf: &[u8], needle: &[u8]) -> usize {
+    let mut k = needle.len().saturating_sub(1).min(buf.len());
+    while k > 0 {
+        if buf[buf.len() - k..] == needle[..k] {
+            return k;
+        }
+        k -= 1;
+    }
+    0
+}
+
+fn parse_tuple(input: &[u8]) -> Option<(Vec<String>, usize)> {
     let mut fields: Vec<String> = Vec::new();
     let mut current: Vec<u8> = Vec::new();
     let mut in_string = false;
     let mut escape = false;
     let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
+    while i < input.len() {
+        let b = input[i];
         i += 1;
         if escape {
             current.push(b);
@@ -107,12 +179,12 @@ fn parse_tuple(input: &str) -> Result<(Vec<String>, usize)> {
             }
             b')' => {
                 fields.push(take_field(&mut current));
-                return Ok((fields, i));
+                return Some((fields, i));
             }
             _ => current.push(b),
         }
     }
-    Err(TomeError::Other("unterminated geotag tuple".into()))
+    None
 }
 
 fn take_field(buf: &mut Vec<u8>) -> String {
@@ -218,5 +290,39 @@ INSERT INTO `geo_tags` VALUES (3,3,'earth',1,3.0,3.0,0,'c',NULL,NULL,NULL);";
         let n = parse_str(sql, |g| tags.push(g)).unwrap();
         assert_eq!(n, 3);
         assert_eq!(tags[2].page_id, 3);
+    }
+
+    #[test]
+    fn handles_statements_split_across_chunk_boundaries() {
+        // Feed the SQL one byte at a time through `parse_buf`, exactly as
+        // `parse_file` drives it, so every prefix, tuple, and `;` straddles a
+        // "chunk" boundary. The retain-and-re-parse path must yield the same
+        // rows as parsing the whole buffer at once, each row exactly once.
+        let sql = "\
+INSERT INTO `geo_tags` VALUES \
+(1,11,'earth',1,42.5,-71.0,1000,'mountain','Foo','US',NULL),\
+(2,22,'earth',0,51.5,-0.1,500,'city',NULL,'GB',NULL);\n\
+INSERT INTO `geo_tags` VALUES (3,33,'earth',1,10.0,20.0,0,'landmark',NULL,NULL,NULL);";
+
+        let mut streamed = Vec::new();
+        {
+            let mut pending: Vec<u8> = Vec::new();
+            let mut push = |g: Geotag| streamed.push(g);
+            for &b in sql.as_bytes() {
+                pending.push(b);
+                let (_, consumed) = parse_buf(&pending, false, &mut push);
+                pending.drain(..consumed);
+            }
+            let _ = parse_buf(&pending, true, &mut push);
+        }
+
+        let mut whole = Vec::new();
+        parse_str(sql, |g| whole.push(g)).unwrap();
+
+        assert_eq!(streamed.len(), 3);
+        assert_eq!(streamed.len(), whole.len());
+        assert_eq!(streamed[0].page_id, 11);
+        assert_eq!(streamed[2].page_id, 33);
+        assert_eq!(streamed[2].kind.as_deref(), Some("landmark"));
     }
 }
