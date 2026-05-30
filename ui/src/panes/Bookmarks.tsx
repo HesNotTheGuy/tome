@@ -163,6 +163,8 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
                 : folders.find((f) => f.id === activeFolder)?.name ?? "Folder"}
           </h2>
 
+          <BackupSection onChanged={refresh} />
+
           {!isTauri() && (
             <div className="p-4 mb-4 rounded border border-tome-border bg-tome-surface-2 text-sm">
               Running outside the Tauri shell — no data available.
@@ -237,6 +239,157 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Backup & restore. Exports all bookmarks + folders to a portable, versioned
+ * JSON file, and imports one back. Paths are pasted (same convention as the
+ * dump/module paths elsewhere in the app). Import defaults to a safe
+ * non-destructive merge; "replace" is opt-in and confirmed.
+ */
+function BackupSection({ onChanged }: { onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [exportPath, setExportPath] = useState("");
+  const [importPath, setImportPath] = useState("");
+  const [replace, setReplace] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function doExport() {
+    if (!exportPath.trim()) {
+      setErr("Enter a folder or a .json file path to save the backup to.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const s = await tome.exportBookmarks(exportPath.trim());
+      setMsg(`Saved ${s.bookmarks} bookmark(s) and ${s.folders} folder(s) → ${s.path}`);
+      setExportPath("");
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doImport() {
+    if (!importPath.trim()) {
+      setErr("Enter the path to a backup .json file.");
+      return;
+    }
+    if (
+      replace &&
+      !confirm(
+        "Replace ALL current bookmarks and folders with this backup? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const s = await tome.importBookmarks(importPath.trim(), replace);
+      let m = `Added ${s.bookmarks_added} bookmark(s)`;
+      if (s.bookmarks_skipped > 0) m += ` (${s.bookmarks_skipped} already present)`;
+      m += `, ${s.folders_created} new folder(s).`;
+      if (s.from_newer_version) {
+        m +=
+          " Note: this backup was made by a newer version of Tome — imported everything this version understands.";
+      }
+      setMsg(m);
+      setImportPath("");
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded border border-tome-border bg-tome-surface">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={!isTauri()}
+        className="w-full flex items-center justify-between px-3 py-2 text-sm text-tome-muted hover:text-tome-text disabled:opacity-50"
+      >
+        <span className="font-semibold uppercase tracking-wide">Backup &amp; restore</span>
+        <span>{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-4 border-t border-tome-border pt-3">
+          {/* Export */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-tome-muted">
+              Export to a backup file
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={exportPath}
+                onChange={(e) => setExportPath(e.target.value)}
+                disabled={busy}
+                placeholder="folder path, or full path ending in .json"
+                className="flex-1 px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={doExport}
+                disabled={busy}
+                className="px-3 py-1 text-sm rounded text-white disabled:opacity-50"
+                style={{ backgroundColor: "var(--tome-accent)" }}
+              >
+                Export
+              </button>
+            </div>
+          </div>
+
+          {/* Import */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-tome-muted">
+              Restore from a backup file
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={importPath}
+                onChange={(e) => setImportPath(e.target.value)}
+                disabled={busy}
+                placeholder="/path/to/tome-bookmarks.json"
+                className="flex-1 px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={doImport}
+                disabled={busy}
+                className="px-3 py-1 text-sm rounded border border-tome-border hover:bg-tome-surface-2 disabled:opacity-50"
+              >
+                Import
+              </button>
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-tome-muted">
+              <input
+                type="checkbox"
+                checked={replace}
+                onChange={(e) => setReplace(e.target.checked)}
+                disabled={busy}
+              />
+              Replace everything (wipe current bookmarks first) — otherwise merge
+            </label>
+          </div>
+
+          {msg && <div className="text-xs text-tome-success">{msg}</div>}
+          {err && <div className="text-xs text-tome-danger">{err}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -14,12 +14,16 @@
 //! Each component is held as an `Arc` so the facade is cheap to clone and
 //! safe to share across async tasks.
 
+pub mod bookmark_export;
 pub mod category_ingest;
 pub mod geotag_ingest;
 pub mod link_resolver;
 pub mod redirect_ingest;
 pub mod tome;
 
+pub use bookmark_export::{
+    BookmarkExport, ExportSummary as BookmarkExportSummary, ImportSummary as BookmarkImportSummary,
+};
 pub use link_resolver::StorageLinkResolver;
 pub use tome::{
     ArticleResponse, ArticleSource, CategoryIngestSummary, EMBEDDING_MODEL_ID,

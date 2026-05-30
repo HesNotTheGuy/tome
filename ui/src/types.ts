@@ -136,6 +136,23 @@ export interface BookmarkFolder {
   created_at: number;
 }
 
+export interface BookmarkExportSummary {
+  path: string;
+  folders: number;
+  bookmarks: number;
+  format_version: number;
+}
+
+export interface BookmarkImportSummary {
+  folders_created: number;
+  folders_matched: number;
+  bookmarks_added: number;
+  bookmarks_skipped: number;
+  source_format_version: number;
+  /** True when the backup came from a newer Tome and was imported best-effort. */
+  from_newer_version: boolean;
+}
+
 export interface DiskSpaceCheck {
   free_bytes: number;
   total_bytes: number;

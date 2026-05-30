@@ -82,6 +82,22 @@ pub trait ArticleStore: Send + Sync {
     fn all_bookmarks(&self, limit: u32) -> Result<Vec<crate::bookmark::Bookmark>>;
     fn count_bookmarks(&self) -> Result<u64>;
 
+    /// Restore folders + bookmarks from a backup in a single transaction.
+    ///
+    /// Folders are matched to existing ones by name (case-insensitive); a
+    /// missing folder is created (parents resolved before children, with a
+    /// defensive fallback to root if a named parent can't be resolved).
+    /// Bookmarks insert idempotently — an existing `(title, folder)` pair is
+    /// skipped, so re-importing the same backup never duplicates. When
+    /// `replace` is true, ALL existing bookmarks and folders are deleted
+    /// first. Either the whole import commits or nothing does.
+    fn import_bookmarks(
+        &self,
+        folders: &[crate::bookmark::ImportFolder],
+        bookmarks: &[crate::bookmark::ImportBookmark],
+        replace: bool,
+    ) -> Result<crate::bookmark::ImportOutcome>;
+
     // --- Bookmark folders ---
 
     /// Create a new folder. Returns the new id. `parent_id = None`
@@ -1064,7 +1080,10 @@ impl ArticleStore for SqliteArticleStore {
         limit: u32,
     ) -> Result<Vec<crate::bookmark::Bookmark>> {
         let conn = self.lock()?;
-        let limit = limit.clamp(1, 10_000) as i64;
+        // Upper bound is a safety clamp against a pathological caller, not a
+        // product cap — a full backup export must never silently truncate, so
+        // it's set far above any plausible human bookmark count.
+        let limit = limit.clamp(1, 1_000_000) as i64;
         // Two prepared statements because SQLite's `?` placeholder
         // doesn't substitute into `IS NULL` cleanly; querying
         // `folder_id = NULL` always returns no rows.
@@ -1109,7 +1128,9 @@ impl ArticleStore for SqliteArticleStore {
             .map_err(|e| TomeError::Storage(format!("prepare all_bookmarks: {e}")))?;
         let rows: rusqlite::Result<Vec<_>> = stmt
             .query_map(
-                params![limit.clamp(1, 10_000) as i64],
+                // See bookmarks_in_folder: a high ceiling so a backup export
+                // never truncates; the UI passes ≤500.
+                params![limit.clamp(1, 1_000_000) as i64],
                 bookmark_row_to_struct,
             )
             .map_err(|e| TomeError::Storage(format!("query all_bookmarks: {e}")))?
@@ -1123,6 +1144,152 @@ impl ArticleStore for SqliteArticleStore {
             .query_row("SELECT COUNT(*) FROM bookmarks", [], |row| row.get(0))
             .map_err(|e| TomeError::Storage(format!("count bookmarks: {e}")))?;
         Ok(n as u64)
+    }
+
+    fn import_bookmarks(
+        &self,
+        folders: &[crate::bookmark::ImportFolder],
+        bookmarks: &[crate::bookmark::ImportBookmark],
+        replace: bool,
+    ) -> Result<crate::bookmark::ImportOutcome> {
+        use crate::bookmark::ImportOutcome;
+        use std::collections::HashMap;
+
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| TomeError::Storage(format!("begin import tx: {e}")))?;
+
+        if replace {
+            // Clear bookmarks before folders so no row briefly references a
+            // folder mid-delete (the FK is ON DELETE SET NULL, but explicit
+            // ordering keeps intent obvious).
+            tx.execute("DELETE FROM bookmarks", [])
+                .map_err(|e| TomeError::Storage(format!("clear bookmarks: {e}")))?;
+            tx.execute("DELETE FROM bookmark_folders", [])
+                .map_err(|e| TomeError::Storage(format!("clear folders: {e}")))?;
+        }
+
+        let mut outcome = ImportOutcome::default();
+
+        // name(lowercased) -> folder id. Seed with whatever already exists so
+        // the import merges into the user's current folders rather than
+        // duplicating them. (Empty after a `replace` wipe.)
+        let mut name_to_id: HashMap<String, i64> = HashMap::new();
+        {
+            let mut stmt = tx
+                .prepare("SELECT id, name FROM bookmark_folders")
+                .map_err(|e| TomeError::Storage(format!("prepare existing folders: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let id: i64 = row.get(0)?;
+                    let name: String = row.get(1)?;
+                    Ok((id, name))
+                })
+                .map_err(|e| TomeError::Storage(format!("query existing folders: {e}")))?;
+            for r in rows {
+                let (id, name) = r.map_err(|e| TomeError::Storage(format!("row folders: {e}")))?;
+                name_to_id.entry(name.to_lowercase()).or_insert(id);
+            }
+        }
+
+        // Folders whose name already maps to an existing one are "matched"
+        // (reused); the rest are pending creation.
+        let mut pending: Vec<&crate::bookmark::ImportFolder> = Vec::new();
+        for f in folders {
+            if name_to_id.contains_key(&f.name.to_lowercase()) {
+                outcome.folders_matched += 1;
+            } else {
+                pending.push(f);
+            }
+        }
+
+        // Create pending folders parents-before-children. Loop until a full
+        // pass makes no progress; any still-unresolved parent (orphan or
+        // cycle in the file) is then rooted so the import never fails over a
+        // bad parent reference.
+        while !pending.is_empty() {
+            let mut progressed = false;
+            let mut still_pending: Vec<&crate::bookmark::ImportFolder> = Vec::new();
+            for f in pending.drain(..) {
+                let key = f.name.to_lowercase();
+                // A duplicate name within the file itself — skip the second.
+                if name_to_id.contains_key(&key) {
+                    continue;
+                }
+                let parent_id = match &f.parent_name {
+                    None => None,
+                    Some(p) => name_to_id.get(&p.to_lowercase()).copied(),
+                };
+                if f.parent_name.is_some() && parent_id.is_none() {
+                    // Parent may be created later this run; defer it.
+                    still_pending.push(f);
+                    continue;
+                }
+                let id = insert_folder_row(&tx, &f.name, parent_id, f.created_at)?;
+                name_to_id.insert(key, id);
+                outcome.folders_created += 1;
+                progressed = true;
+            }
+            pending = still_pending;
+            if !progressed {
+                // The remainder reference parents we can't resolve; root them
+                // so their bookmarks still land somewhere rather than failing.
+                for f in pending.drain(..) {
+                    let key = f.name.to_lowercase();
+                    if name_to_id.contains_key(&key) {
+                        continue;
+                    }
+                    let id = insert_folder_row(&tx, &f.name, None, f.created_at)?;
+                    name_to_id.insert(key, id);
+                    outcome.folders_created += 1;
+                }
+                break;
+            }
+        }
+
+        // Insert bookmarks idempotently — an existing (title, folder) pair is
+        // skipped so re-importing the same backup never duplicates.
+        for b in bookmarks {
+            let folder_id = match &b.folder_name {
+                None => None,
+                // Unknown folder name → land it unfiled rather than drop it.
+                Some(name) => name_to_id.get(&name.to_lowercase()).copied(),
+            };
+            let existing: Option<i64> = match folder_id {
+                Some(fid) => tx
+                    .query_row(
+                        "SELECT id FROM bookmarks WHERE article_title = ?1 AND folder_id = ?2",
+                        params![b.title, fid],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| TomeError::Storage(format!("check existing bookmark: {e}")))?,
+                None => tx
+                    .query_row(
+                        "SELECT id FROM bookmarks WHERE article_title = ?1 AND folder_id IS NULL",
+                        params![b.title],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| TomeError::Storage(format!("check existing bookmark: {e}")))?,
+            };
+            if existing.is_some() {
+                outcome.bookmarks_skipped += 1;
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO bookmarks (article_title, folder_id, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![b.title, folder_id, b.note.as_deref(), b.created_at],
+            )
+            .map_err(|e| TomeError::Storage(format!("insert bookmark during import: {e}")))?;
+            outcome.bookmarks_added += 1;
+        }
+
+        tx.commit()
+            .map_err(|e| TomeError::Storage(format!("commit import: {e}")))?;
+        Ok(outcome)
     }
 
     fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<i64> {
@@ -1356,7 +1523,6 @@ impl ArticleStore for SqliteArticleStore {
     }
 }
 
-/// Encode a vector of f32 as little-endian bytes for SQLite BLOB storage.
 /// Map a SELECT id, article_title, folder_id, note, created_at row to a
 /// Bookmark struct. Pulled out into a free function so the multiple
 /// query sites in the impl can share it.
@@ -1368,6 +1534,23 @@ fn bookmark_row_to_struct(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::bo
         note: row.get(3)?,
         created_at: row.get(4)?,
     })
+}
+
+/// Insert one folder row inside an import transaction and return its new id.
+/// A free function (not a closure) so it borrows the transaction cleanly at
+/// each call site without lifetime gymnastics.
+fn insert_folder_row(
+    tx: &rusqlite::Transaction<'_>,
+    name: &str,
+    parent_id: Option<i64>,
+    created_at: i64,
+) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO bookmark_folders (name, parent_id, created_at) VALUES (?1, ?2, ?3)",
+        params![name, parent_id, created_at],
+    )
+    .map_err(|e| TomeError::Storage(format!("insert folder during import: {e}")))?;
+    Ok(tx.last_insert_rowid())
 }
 
 fn vec_f32_to_blob(v: &[f32]) -> Vec<u8> {
@@ -1863,5 +2046,127 @@ mod tests {
             .map(|f| f.name)
             .collect();
         assert_eq!(names, vec!["Alpha", "middle", "zebra"]);
+    }
+
+    // --- import_bookmarks (backup restore) ---
+
+    use crate::bookmark::{ImportBookmark, ImportFolder};
+
+    fn ifolder(name: &str, parent: Option<&str>) -> ImportFolder {
+        ImportFolder {
+            name: name.into(),
+            parent_name: parent.map(Into::into),
+            created_at: 100,
+        }
+    }
+    fn ibm(title: &str, folder: Option<&str>) -> ImportBookmark {
+        ImportBookmark {
+            title: title.into(),
+            folder_name: folder.map(Into::into),
+            note: None,
+            created_at: 200,
+        }
+    }
+
+    #[test]
+    fn import_into_empty_creates_folders_and_bookmarks() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let folders = vec![ifolder("Survival", None)];
+        let bookmarks = vec![ibm("Water purification", Some("Survival")), ibm("Photon", None)];
+        let out = store.import_bookmarks(&folders, &bookmarks, false).unwrap();
+        assert_eq!(out.folders_created, 1);
+        assert_eq!(out.bookmarks_added, 2);
+        assert_eq!(out.bookmarks_skipped, 0);
+        assert_eq!(store.count_bookmarks().unwrap(), 2);
+        // The bookmark landed in the named folder, resolved by name.
+        let fid = store.list_folders().unwrap()[0].id;
+        assert_eq!(store.bookmarks_in_folder(Some(fid), 100).unwrap().len(), 1);
+        assert_eq!(store.bookmarks_in_folder(None, 100).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn import_is_idempotent() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let folders = vec![ifolder("Survival", None)];
+        let bookmarks = vec![ibm("Water purification", Some("Survival"))];
+        store.import_bookmarks(&folders, &bookmarks, false).unwrap();
+        // Re-importing the same backup must not duplicate anything.
+        let out = store.import_bookmarks(&folders, &bookmarks, false).unwrap();
+        assert_eq!(out.folders_created, 0);
+        assert_eq!(out.folders_matched, 1);
+        assert_eq!(out.bookmarks_added, 0);
+        assert_eq!(out.bookmarks_skipped, 1);
+        assert_eq!(store.count_bookmarks().unwrap(), 1);
+        assert_eq!(store.list_folders().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn import_merges_into_existing_folder_by_name_case_insensitive() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.create_folder("Survival", None).unwrap();
+        // Backup names the folder with different casing; must merge, not dup.
+        let out = store
+            .import_bookmarks(&[ifolder("SURVIVAL", None)], &[ibm("Fire", Some("survival"))], false)
+            .unwrap();
+        assert_eq!(out.folders_created, 0);
+        assert_eq!(out.folders_matched, 1);
+        assert_eq!(store.list_folders().unwrap().len(), 1);
+        let fid = store.list_folders().unwrap()[0].id;
+        assert_eq!(store.bookmarks_in_folder(Some(fid), 100).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn import_replace_wipes_existing_first() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        let old = store.create_folder("Old", None).unwrap();
+        store.add_bookmark("Stale", Some(old), None).unwrap();
+        let out = store
+            .import_bookmarks(&[ifolder("Fresh", None)], &[ibm("New", Some("Fresh"))], true)
+            .unwrap();
+        assert_eq!(out.bookmarks_added, 1);
+        assert_eq!(store.count_bookmarks().unwrap(), 1);
+        let folders = store.list_folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Fresh");
+        assert!(!store.is_bookmarked("Stale").unwrap());
+    }
+
+    #[test]
+    fn import_resolves_nested_folders_regardless_of_order() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        // Child listed before parent — the resolver must still link them.
+        let folders = vec![ifolder("Child", Some("Parent")), ifolder("Parent", None)];
+        let out = store.import_bookmarks(&folders, &[], false).unwrap();
+        assert_eq!(out.folders_created, 2);
+        let folders = store.list_folders().unwrap();
+        let parent = folders.iter().find(|f| f.name == "Parent").unwrap();
+        let child = folders.iter().find(|f| f.name == "Child").unwrap();
+        assert_eq!(child.parent_id, Some(parent.id));
+        assert_eq!(parent.parent_id, None);
+    }
+
+    #[test]
+    fn import_unresolvable_parent_is_rooted_not_failed() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        // Parent name never appears — must root the folder, not error.
+        let out = store
+            .import_bookmarks(&[ifolder("Orphan", Some("Ghost"))], &[], false)
+            .unwrap();
+        assert_eq!(out.folders_created, 1);
+        let f = &store.list_folders().unwrap()[0];
+        assert_eq!(f.name, "Orphan");
+        assert_eq!(f.parent_id, None);
+    }
+
+    #[test]
+    fn import_unknown_bookmark_folder_lands_unfiled() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        // Bookmark references a folder not present in the backup → unfiled,
+        // never dropped.
+        let out = store
+            .import_bookmarks(&[], &[ibm("Photon", Some("Nonexistent"))], false)
+            .unwrap();
+        assert_eq!(out.bookmarks_added, 1);
+        assert_eq!(store.bookmarks_in_folder(None, 100).unwrap().len(), 1);
     }
 }

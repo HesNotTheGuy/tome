@@ -25,7 +25,7 @@ pub mod store;
 
 pub use archive::{ArchiveStore, SavedRevision, SavedRevisionMeta};
 pub use article::{ArticleContent, ArticleMetadata, ArticleRecord};
-pub use bookmark::{Bookmark, BookmarkFolder};
+pub use bookmark::{Bookmark, BookmarkFolder, ImportBookmark, ImportFolder, ImportOutcome};
 pub use category::{CategoryLink, CategoryMember, CategoryMemberKind};
 pub use geotag::Geotag;
 pub use redirect::Redirect;

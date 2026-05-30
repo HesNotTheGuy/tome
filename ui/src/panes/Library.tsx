@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { tome } from "../service";
-import { InstalledModule, isTauri } from "../types";
+import { relativeTime } from "../time";
+import { HistoryEntry, InstalledModule, isTauri } from "../types";
 
 interface LibraryProps {
   onOpen: (title: string) => void;
@@ -54,6 +55,8 @@ export default function Library({ onOpen }: LibraryProps) {
         </div>
       )}
 
+      <ContinueReading onOpen={onOpen} />
+
       <ImportSection onComplete={refresh} />
 
       {loaded && modules.length === 0 && (
@@ -103,6 +106,53 @@ export default function Library({ onOpen }: LibraryProps) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * "Continue reading" — the most recently opened articles, newest first.
+ * Reuses History's data (`recent_articles`) so it reflects exactly what the
+ * History pane shows, no separate bookkeeping. Renders nothing when there's
+ * no history (fresh install, history disabled, or just cleared) so the
+ * landing page never shows an empty shell.
+ */
+function ContinueReading({ onOpen }: { onOpen: (title: string) => void }) {
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    tome
+      .recentArticles(8)
+      .then(setEntries)
+      .catch(() => {
+        // Non-load-bearing; a failure here just hides the section.
+      });
+  }, []);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
+        Continue reading
+      </h3>
+      <ul className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.map((e) => (
+          <li key={e.page_id}>
+            <button
+              type="button"
+              onClick={() => onOpen(e.title)}
+              className="w-full text-left p-3 rounded border border-tome-border bg-tome-surface hover:border-tome-border-strong"
+            >
+              <div className="text-sm font-medium truncate">{e.title}</div>
+              <div className="text-xs text-tome-muted mt-0.5">
+                {relativeTime(e.last_accessed)}
+              </div>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

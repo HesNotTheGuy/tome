@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { tome } from "../service";
+import { relativeTime } from "../time";
 import { HistoryEntry, isTauri } from "../types";
 
 interface HistoryProps {
@@ -112,7 +113,7 @@ export default function History({ onOpen }: HistoryProps) {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{e.title}</div>
                 <div className="text-xs text-tome-muted mt-0.5">
-                  {formatTimestamp(e.last_accessed)}
+                  {relativeTime(e.last_accessed)}
                   {e.access_count > 1 && ` · read ${e.access_count} times`}
                 </div>
               </div>
@@ -123,17 +124,4 @@ export default function History({ onOpen }: HistoryProps) {
       )}
     </section>
   );
-}
-
-/** Human-readable relative timestamp ("3 minutes ago"). Falls back to
- *  a locale date string for anything older than a week. */
-function formatTimestamp(unixSeconds: number): string {
-  if (!unixSeconds) return "never";
-  const now = Math.floor(Date.now() / 1000);
-  const diff = now - unixSeconds;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)} days ago`;
-  return new Date(unixSeconds * 1000).toLocaleDateString();
 }

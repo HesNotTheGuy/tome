@@ -10,7 +10,9 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
   ArticleResponse,
   Bookmark,
+  BookmarkExportSummary,
   BookmarkFolder,
+  BookmarkImportSummary,
   CategoryIngestSummary,
   CategoryMember,
   CategoryMemberKind,
@@ -76,6 +78,8 @@ export interface TomeService {
   renameFolder(id: number, newName: string): Promise<void>;
   deleteFolder(id: number): Promise<void>;
   listFolders(): Promise<BookmarkFolder[]>;
+  exportBookmarks(path: string): Promise<BookmarkExportSummary>;
+  importBookmarks(path: string, replace: boolean): Promise<BookmarkImportSummary>;
   ingestIndex(
     path: string,
     onProgress: (count: number) => void,
@@ -225,6 +229,12 @@ export const tome: TomeService = {
   },
   listFolders() {
     return invoke<BookmarkFolder[]>("list_folders");
+  },
+  exportBookmarks(path) {
+    return invoke<BookmarkExportSummary>("export_bookmarks", { path });
+  },
+  importBookmarks(path, replace) {
+    return invoke<BookmarkImportSummary>("import_bookmarks", { path, replace });
   },
   fetchRevisions(title, limit) {
     return invoke<Revision[]>("fetch_revisions", { title, limit });

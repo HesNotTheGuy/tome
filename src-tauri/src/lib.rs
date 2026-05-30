@@ -21,8 +21,9 @@ use tome_core::{DiskSpaceCheck, SearchHit, Tier, Title};
 use tome_modules::{InstalledModule, ModuleSpec, ModuleStore};
 use tome_search::Index as SearchIndex;
 use tome_services::{
-    ArticleResponse, CategoryIngestSummary, ChatAnswer, EmbeddingIngestSummary, GeotagSummary,
-    IngestSummary, RedirectIngestSummary, TierCounts, Tome,
+    ArticleResponse, BookmarkExportSummary, BookmarkImportSummary, CategoryIngestSummary,
+    ChatAnswer, EmbeddingIngestSummary, GeotagSummary, IngestSummary, RedirectIngestSummary,
+    TierCounts, Tome,
 };
 use tome_storage::{
     ArchiveStore, ArticleStore, Bookmark, BookmarkFolder, CategoryMember, CategoryMemberKind,
@@ -81,6 +82,8 @@ pub fn run() {
             rename_folder,
             delete_folder,
             list_folders,
+            export_bookmarks,
+            import_bookmarks,
             ingest_index,
             ingest_geotags,
             count_geotags,
@@ -385,6 +388,33 @@ fn delete_folder(id: i64, state: State<'_, Arc<Tome>>) -> Result<(), String> {
 #[tauri::command]
 fn list_folders(state: State<'_, Arc<Tome>>) -> Result<Vec<BookmarkFolder>, String> {
     state.list_folders().map_err(|e| e.to_string())
+}
+
+/// Write a portable backup of every bookmark + folder to `path`. `path` may
+/// be a full `.json` file path or an existing directory (a default filename
+/// is used inside it).
+#[tauri::command]
+fn export_bookmarks(
+    path: String,
+    state: State<'_, Arc<Tome>>,
+) -> Result<BookmarkExportSummary, String> {
+    state
+        .export_bookmarks(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
+/// Restore bookmarks + folders from a backup file. `replace = false` merges
+/// (adds what's missing, keeps existing); `replace = true` wipes current
+/// bookmarks and folders first.
+#[tauri::command]
+fn import_bookmarks(
+    path: String,
+    replace: bool,
+    state: State<'_, Arc<Tome>>,
+) -> Result<BookmarkImportSummary, String> {
+    state
+        .import_bookmarks(std::path::Path::new(&path), replace)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

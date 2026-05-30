@@ -568,6 +568,99 @@ impl Tome {
         self.storage.list_folders()
     }
 
+    /// Export every bookmark and folder to a portable, versioned JSON backup.
+    ///
+    /// `dest` may be a full file path (`…/my-bookmarks.json`) or an existing
+    /// directory, in which case a `tome-bookmarks.json` file is written
+    /// inside it — friendlier for a user who pastes a folder path.
+    ///
+    /// The write is atomic (temp file + rename) so a crash mid-write can never
+    /// truncate or corrupt the destination, and we verify every row was
+    /// captured before writing so a backup is never silently partial.
+    pub fn export_bookmarks(&self, dest: &Path) -> Result<crate::bookmark_export::ExportSummary> {
+        use crate::bookmark_export::BookmarkExport;
+
+        let folders = self.storage.list_folders()?;
+        // A high limit (the storage layer clamps at 1,000,000, far above any
+        // human bookmark count); we then assert completeness below.
+        let bookmarks = self.storage.all_bookmarks(u32::MAX)?;
+
+        // Integrity guard: never write a partial backup. If the fetched count
+        // somehow trails the table count, refuse rather than silently drop.
+        let total = self.storage.count_bookmarks()?;
+        if (bookmarks.len() as u64) < total {
+            return Err(TomeError::Other(format!(
+                "refusing to write a partial backup: fetched {} of {total} bookmarks",
+                bookmarks.len()
+            )));
+        }
+
+        let exported_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .ok();
+
+        let export = BookmarkExport::build(&folders, &bookmarks, exported_at);
+        let json = export.to_pretty_json()?;
+
+        // Resolve a directory destination to a default filename inside it.
+        let path = if dest.is_dir() {
+            dest.join("tome-bookmarks.json")
+        } else {
+            dest.to_path_buf()
+        };
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    TomeError::Other(format!("create backup directory {parent:?}: {e}"))
+                })?;
+            }
+        }
+
+        // Atomic write: a sibling temp file then rename over the destination.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json.as_bytes())
+            .map_err(|e| TomeError::Other(format!("write backup temp {tmp:?}: {e}")))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| TomeError::Other(format!("finalize backup {path:?}: {e}")))?;
+
+        Ok(crate::bookmark_export::ExportSummary {
+            path: path.to_string_lossy().into_owned(),
+            folders: folders.len() as u64,
+            bookmarks: bookmarks.len() as u64,
+            format_version: crate::bookmark_export::CURRENT_FORMAT_VERSION,
+        })
+    }
+
+    /// Import bookmarks + folders from a backup file produced by
+    /// [`Tome::export_bookmarks`] (or any compatible/older version).
+    ///
+    /// `replace = false` (merge) adds anything missing and leaves existing
+    /// bookmarks untouched — the safe default. `replace = true` wipes all
+    /// current bookmarks and folders first. The whole import is one
+    /// transaction, so a malformed entry can never leave a half-imported
+    /// state.
+    pub fn import_bookmarks(
+        &self,
+        src: &Path,
+        replace: bool,
+    ) -> Result<crate::bookmark_export::ImportSummary> {
+        let text = std::fs::read_to_string(src)
+            .map_err(|e| TomeError::Other(format!("read backup {src:?}: {e}")))?;
+        let parsed = crate::bookmark_export::parse(&text)?;
+        let (folders, bookmarks) = parsed.export.into_storage();
+        let outcome = self.storage.import_bookmarks(&folders, &bookmarks, replace)?;
+        Ok(crate::bookmark_export::ImportSummary {
+            folders_created: outcome.folders_created,
+            folders_matched: outcome.folders_matched,
+            bookmarks_added: outcome.bookmarks_added,
+            bookmarks_skipped: outcome.bookmarks_skipped,
+            source_format_version: parsed.source_format_version,
+            from_newer_version: parsed.from_newer_version,
+        })
+    }
+
     /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)
     /// and upsert every entry as Cold-tier metadata. The full index is
     /// ~6.5M lines for English Wikipedia; this typically completes in 30-90s
