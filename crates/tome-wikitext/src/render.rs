@@ -6,7 +6,9 @@
 //! (headings, lists, horizontal rules) close the current paragraph,
 //! `ParagraphBreak` does the same.
 
-use parse_wiki_text_2::{Configuration, Node};
+use std::collections::HashMap;
+
+use parse_wiki_text_2::{Configuration, Node, Parameter};
 
 use crate::escape::{escape_attr, escape_text};
 use crate::link::{LinkResolver, LinkStatus};
@@ -80,6 +82,9 @@ struct State<'a> {
     bold_italic: bool,
     in_paragraph: bool,
     refs: Vec<String>,
+    /// Per-document heading slug usage, for deduplicating anchor ids.
+    /// Reset with each `render` call (this struct is built per call).
+    heading_counts: HashMap<String, u32>,
     resolver: &'a dyn LinkResolver,
     options: &'a RenderOptions,
 }
@@ -93,8 +98,23 @@ impl<'a> State<'a> {
             bold_italic: false,
             in_paragraph: false,
             refs: Vec::new(),
+            heading_counts: HashMap::new(),
             resolver,
             options,
+        }
+    }
+
+    /// Stable anchor id for a heading: `"s-" + slug`, with `-2`, `-3`, …
+    /// suffixes for repeated slugs in document order. The Reader UI builds
+    /// its table of contents from these ids — the format is a fixed contract.
+    fn heading_id(&mut self, text: &str) -> String {
+        let slug = slugify(text);
+        let count = self.heading_counts.entry(slug.clone()).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            format!("s-{slug}")
+        } else {
+            format!("s-{slug}-{count}")
         }
     }
 
@@ -134,8 +154,14 @@ impl<'a> State<'a> {
         if self.refs.is_empty() {
             return;
         }
-        self.out
-            .push_str("<section class=\"tome-references\"><h2>References</h2><ol>");
+        // The synthesized References heading participates in the same anchor
+        // namespace as article headings, so an explicit `== References ==`
+        // earlier in the document still yields unique ids.
+        let id = self.heading_id("References");
+        self.out.push_str(&format!(
+            "<section class=\"tome-references\"><h2 id=\"{}\">References</h2><ol>",
+            escape_attr(&id)
+        ));
         for (i, content) in self.refs.iter().enumerate() {
             let n = i + 1;
             self.out
@@ -202,7 +228,12 @@ fn render_node(state: &mut State<'_>, node: &Node<'_>) {
             let lvl = (*level)
                 .max(state.options.min_heading_level)
                 .min(state.options.max_heading_level);
-            state.out.push_str(&format!("<h{lvl}>"));
+            let mut heading_text = String::new();
+            collect_text_into(&mut heading_text, children);
+            let id = state.heading_id(&heading_text);
+            state
+                .out
+                .push_str(&format!("<h{lvl} id=\"{}\">", escape_attr(&id)));
             let was_in_p = state.in_paragraph;
             state.in_paragraph = true; // suppress nested <p> wrapping
             walk(state, children);
@@ -304,14 +335,10 @@ fn render_node(state: &mut State<'_>, node: &Node<'_>) {
             }
             state.out.push_str("</dl>");
         }
-        Node::Template { name, .. } => {
-            state.ensure_paragraph_open();
-            let mut name_text = String::new();
-            collect_text_into(&mut name_text, name);
-            state.out.push_str(&format!(
-                "<span class=\"tome-template-placeholder\" title=\"template not rendered locally\">[Template: {}]</span>",
-                escape_text(name_text.trim())
-            ));
+        Node::Template {
+            name, parameters, ..
+        } => {
+            render_template(state, name, parameters);
         }
         Node::Image { target, .. } => {
             state.ensure_paragraph_open();
@@ -328,9 +355,27 @@ fn render_node(state: &mut State<'_>, node: &Node<'_>) {
             let n = name.as_ref();
             if n.eq_ignore_ascii_case("ref") {
                 state.ensure_paragraph_open();
-                let mut buf = String::new();
-                collect_text_into(&mut buf, children);
-                state.refs.push(buf);
+                // Render the body through the full walker (not the plain-text
+                // collector) so cite templates inside refs format as
+                // citations and text is escaped. The output buffer and inline
+                // state are swapped out so the footnote renders in isolation.
+                let saved_out = std::mem::take(&mut state.out);
+                let saved_in_p = state.in_paragraph;
+                let saved_bold = state.bold;
+                let saved_italic = state.italic;
+                let saved_bold_italic = state.bold_italic;
+                state.in_paragraph = true; // suppress <p> wrapping in footnotes
+                state.bold = false;
+                state.italic = false;
+                state.bold_italic = false;
+                walk(state, children);
+                state.close_inline();
+                let body = std::mem::replace(&mut state.out, saved_out);
+                state.in_paragraph = saved_in_p;
+                state.bold = saved_bold;
+                state.italic = saved_italic;
+                state.bold_italic = saved_bold_italic;
+                state.refs.push(body);
                 let idx = state.refs.len();
                 state.out.push_str(&format!(
                     "<sup class=\"tome-ref\"><a href=\"#ref-{idx}\">[{idx}]</a></sup>"
@@ -448,6 +493,228 @@ fn url_encode_title(title: &str) -> String {
     out
 }
 
+/// Slug for heading anchors: lowercase, ASCII alphanumerics kept, every other
+/// character collapsed to single `-`, leading/trailing `-` trimmed,
+/// `"section"` when nothing survives.
+fn slugify(text: &str) -> String {
+    let mut slug = String::with_capacity(text.len());
+    let mut prev_dash = false;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            slug.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "section".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Render a template by family. Known families (infoboxes, citations,
+/// convert, lang/IPA) get readable approximations; everything else falls
+/// back to the placeholder span.
+fn render_template(state: &mut State<'_>, name: &[Node<'_>], parameters: &[Parameter<'_>]) {
+    let mut raw_name = String::new();
+    collect_text_into(&mut raw_name, name);
+    let raw_name = raw_name.trim();
+    // Template names use '_' interchangeably with ' '; normalize for dispatch.
+    let normalized = raw_name.to_lowercase().replace('_', " ");
+
+    let rendered = if normalized.starts_with("infobox") {
+        render_infobox(state, raw_name, parameters)
+    } else if normalized == "citation" || normalized.starts_with("cite") {
+        render_citation(state, parameters)
+    } else if normalized == "convert" {
+        render_convert(state, parameters)
+    } else if normalized == "lang" {
+        render_positional_text(state, parameters, PositionalPick::Last)
+    } else if normalized.starts_with("ipa") {
+        render_positional_text(state, parameters, PositionalPick::First)
+    } else {
+        false
+    };
+
+    if !rendered {
+        render_template_placeholder(state, raw_name);
+    }
+}
+
+fn render_template_placeholder(state: &mut State<'_>, name_text: &str) {
+    state.ensure_paragraph_open();
+    state.out.push_str(&format!(
+        "<span class=\"tome-template-placeholder\" title=\"template not rendered locally\">[Template: {}]</span>",
+        escape_text(name_text)
+    ));
+}
+
+/// Infoboxes are block-level: the open paragraph closes before the div,
+/// mirroring tables. Returns false (caller emits the placeholder) when no
+/// named parameter has a non-empty value.
+fn render_infobox(state: &mut State<'_>, raw_name: &str, parameters: &[Parameter<'_>]) -> bool {
+    let mut rows = String::new();
+    for param in parameters {
+        let Some(name_nodes) = &param.name else {
+            continue; // positional parameters carry no label to show
+        };
+        let key = collect_param_text(name_nodes);
+        let value = collect_param_text(&param.value);
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        rows.push_str(&format!(
+            "<tr><th>{}</th><td>{}</td></tr>",
+            escape_text(&key.replace('_', " ")),
+            escape_text(&value)
+        ));
+    }
+    if rows.is_empty() {
+        return false;
+    }
+    state.close_inline();
+    state.close_paragraph();
+    state.out.push_str(&format!(
+        "<div class=\"tome-infobox\"><div class=\"tome-infobox-title\">{}</div>\
+         <table class=\"tome-infobox-params\">{rows}</table></div>",
+        escape_text(&prettify_template_name(raw_name))
+    ));
+    true
+}
+
+/// Citation templates render inline as "“title”. author. (date). url" with
+/// each part included only when present. Returns false when none of the
+/// recognized parameters exist.
+fn render_citation(state: &mut State<'_>, parameters: &[Parameter<'_>]) -> bool {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(title) = named_param(parameters, "title") {
+        parts.push(format!("\u{201C}{}\u{201D}", escape_text(&title)));
+    }
+    if let Some(author) = named_param(parameters, "author") {
+        parts.push(escape_text(&author));
+    } else if let Some(last) = named_param(parameters, "last") {
+        let joined = match named_param(parameters, "first") {
+            Some(first) => format!("{last}, {first}"),
+            None => last,
+        };
+        parts.push(escape_text(&joined));
+    }
+    if let Some(date) = named_param(parameters, "date") {
+        parts.push(format!("({})", escape_text(&date)));
+    }
+    if let Some(url) = named_param(parameters, "url") {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            parts.push(format!(
+                "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
+                escape_attr(&url),
+                escape_text(&url)
+            ));
+        } else {
+            parts.push(escape_text(&url));
+        }
+    }
+    if parts.is_empty() {
+        return false;
+    }
+    state.ensure_paragraph_open();
+    state.out.push_str(&format!(
+        "<span class=\"tome-citation\">{}</span>",
+        parts.join(". ")
+    ));
+    true
+}
+
+/// `{{convert|5|km|mi}}` → `5 km`: the first two positional parameters
+/// joined with a space. Returns false with fewer than two positionals.
+fn render_convert(state: &mut State<'_>, parameters: &[Parameter<'_>]) -> bool {
+    let positional = positional_params(parameters);
+    if positional.len() < 2 {
+        return false;
+    }
+    state.ensure_paragraph_open();
+    state.out.push_str(&format!(
+        "<span class=\"tome-convert\">{} {}</span>",
+        escape_text(&positional[0]),
+        escape_text(&positional[1])
+    ));
+    true
+}
+
+enum PositionalPick {
+    First,
+    Last,
+}
+
+/// `{{lang|fr|Élysée}}` → `Élysée` (last positional); `{{IPA|/x/}}` → `/x/`
+/// (first positional). Plain escaped text, no wrapper. Returns false when
+/// the picked parameter is missing or empty.
+fn render_positional_text(
+    state: &mut State<'_>,
+    parameters: &[Parameter<'_>],
+    pick: PositionalPick,
+) -> bool {
+    let positional = positional_params(parameters);
+    let text = match pick {
+        PositionalPick::First => positional.first(),
+        PositionalPick::Last => positional.last(),
+    };
+    match text {
+        Some(text) if !text.is_empty() => {
+            state.ensure_paragraph_open();
+            state.out.push_str(&escape_text(text));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Plain-text value of a parameter's nodes, trimmed.
+fn collect_param_text(nodes: &[Node<'_>]) -> String {
+    let mut buf = String::new();
+    collect_text_into(&mut buf, nodes);
+    buf.trim().to_string()
+}
+
+/// Value of the named parameter `key` (case-insensitive), skipping
+/// parameters whose value collects to empty text.
+fn named_param(parameters: &[Parameter<'_>], key: &str) -> Option<String> {
+    parameters.iter().find_map(|param| {
+        let name_nodes = param.name.as_ref()?;
+        if !collect_param_text(name_nodes).eq_ignore_ascii_case(key) {
+            return None;
+        }
+        let value = collect_param_text(&param.value);
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    })
+}
+
+/// Text values of unnamed (positional) parameters, in order.
+fn positional_params(parameters: &[Parameter<'_>]) -> Vec<String> {
+    parameters
+        .iter()
+        .filter(|param| param.name.is_none())
+        .map(|param| collect_param_text(&param.value))
+        .collect()
+}
+
+/// `infobox_korean_name` → `Infobox korean name`.
+fn prettify_template_name(raw: &str) -> String {
+    let spaced = raw.replace('_', " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => spaced,
+    }
+}
+
 fn split_external_link(nodes: &[Node<'_>]) -> (String, String) {
     let mut joined = String::new();
     collect_text_into(&mut joined, nodes);
@@ -492,7 +759,7 @@ mod tests {
     #[test]
     fn heading_starts_at_h2_by_default() {
         let out = render("== Section ==");
-        assert!(out.contains("<h2>"), "got: {out}");
+        assert!(out.contains("<h2 id=\"s-section\">"), "got: {out}");
         assert!(out.contains("Section"), "got: {out}");
         assert!(out.contains("</h2>"), "got: {out}");
     }
@@ -501,7 +768,38 @@ mod tests {
     fn heading_clamps_to_h6_at_top() {
         // Wikitext supports h1-h6; we clamp h1 up to h2 by default.
         let out = render("= TopLevel =");
-        assert!(out.contains("<h2>TopLevel</h2>"), "got: {out}");
+        assert!(
+            out.contains("<h2 id=\"s-toplevel\">TopLevel</h2>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn heading_id_from_simple_text() {
+        let out = render("== Early life ==");
+        assert!(
+            out.contains("<h2 id=\"s-early-life\">Early life</h2>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn heading_id_slugs_punctuation_and_unicode_to_dashes() {
+        let out = render("== Café & Bars! ==");
+        assert!(out.contains("id=\"s-caf-bars\""), "got: {out}");
+    }
+
+    #[test]
+    fn duplicate_headings_get_numbered_ids_in_document_order() {
+        let out = render("== History ==\n\nFirst.\n\n== History ==\n\nSecond.");
+        assert!(out.contains("id=\"s-history\""), "got: {out}");
+        assert!(out.contains("id=\"s-history-2\""), "got: {out}");
+    }
+
+    #[test]
+    fn heading_with_no_sluggable_chars_falls_back_to_section() {
+        let out = render("== !!! ==");
+        assert!(out.contains("id=\"s-section\""), "got: {out}");
     }
 
     #[test]
@@ -569,11 +867,153 @@ mod tests {
     }
 
     #[test]
-    fn template_renders_as_placeholder() {
-        let out = render("{{infobox|name=Photon|kind=particle}}");
+    fn unknown_template_renders_as_placeholder() {
+        let out = render("{{citation needed|date=June 2026}}");
         assert!(out.contains("tome-template-placeholder"), "got: {out}");
         assert!(out.contains("Template:"), "got: {out}");
-        assert!(out.contains("infobox"), "got: {out}");
+        assert!(out.contains("citation needed"), "got: {out}");
+    }
+
+    #[test]
+    fn infobox_renders_named_params_as_rows_and_skips_positional() {
+        let out = render("{{Infobox person|positional junk|name=Ada Lovelace|occupation=Mathematician}}");
+        assert!(out.contains("<div class=\"tome-infobox\">"), "got: {out}");
+        assert!(
+            out.contains("<div class=\"tome-infobox-title\">Infobox person</div>"),
+            "got: {out}"
+        );
+        assert!(out.contains("<table class=\"tome-infobox-params\">"), "got: {out}");
+        assert!(
+            out.contains("<tr><th>name</th><td>Ada Lovelace</td></tr>"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("<tr><th>occupation</th><td>Mathematician</td></tr>"),
+            "got: {out}"
+        );
+        assert_eq!(out.matches("<tr>").count(), 2, "got: {out}");
+        assert!(!out.contains("positional junk"), "got: {out}");
+    }
+
+    #[test]
+    fn infobox_name_underscores_prettified_in_title() {
+        let out = render("{{infobox_settlement|population=42}}");
+        assert!(
+            out.contains("<div class=\"tome-infobox-title\">Infobox settlement</div>"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("<tr><th>population</th><td>42</td></tr>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn infobox_closes_open_paragraph_before_block() {
+        let out = render("Intro text {{Infobox star|name=Sol}} trailing text.");
+        assert!(out.contains("</p><div class=\"tome-infobox\">"), "got: {out}");
+    }
+
+    #[test]
+    fn infobox_with_only_positional_params_falls_back_to_placeholder() {
+        let out = render("{{infobox|alpha|beta}}");
+        assert!(out.contains("tome-template-placeholder"), "got: {out}");
+        assert!(!out.contains("tome-infobox\""), "got: {out}");
+    }
+
+    #[test]
+    fn cite_web_renders_title_and_url_link() {
+        let out = render("{{cite web|title=Photon basics|url=https://example.com/photon}}");
+        assert!(out.contains("<span class=\"tome-citation\">"), "got: {out}");
+        assert!(out.contains("\u{201C}Photon basics\u{201D}"), "got: {out}");
+        assert!(
+            out.contains(
+                "<a href=\"https://example.com/photon\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/photon</a>"
+            ),
+            "got: {out}"
+        );
+        assert!(!out.contains("tome-template-placeholder"), "got: {out}");
+    }
+
+    #[test]
+    fn cite_url_with_quote_is_escaped_in_attribute() {
+        let out = render("{{cite web|title=X|url=https://example.com/\"q}}");
+        assert!(
+            out.contains("href=\"https://example.com/&quot;q\""),
+            "got: {out}"
+        );
+        assert!(!out.contains("/\"q"), "raw quote leaked: {out}");
+    }
+
+    #[test]
+    fn cite_non_http_url_renders_as_plain_text() {
+        let out = render("{{cite web|title=X|url=ftp://example.com/file}}");
+        assert!(out.contains("ftp://example.com/file"), "got: {out}");
+        assert!(!out.contains("<a href=\"ftp:"), "got: {out}");
+    }
+
+    #[test]
+    fn citation_joins_author_last_first_and_date() {
+        let out = render("{{citation|title=On Photons|last=Curie|first=Marie|date=1903}}");
+        assert!(
+            out.contains("\u{201C}On Photons\u{201D}. Curie, Marie. (1903)"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn citation_without_recognized_params_falls_back_to_placeholder() {
+        let out = render("{{citation|publisher=Acme Press}}");
+        assert!(out.contains("tome-template-placeholder"), "got: {out}");
+        assert!(!out.contains("tome-citation"), "got: {out}");
+    }
+
+    #[test]
+    fn convert_renders_first_two_positional_params() {
+        let out = render("{{convert|5|km|mi}}");
+        assert!(
+            out.contains("<span class=\"tome-convert\">5 km</span>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn convert_with_one_positional_param_falls_back_to_placeholder() {
+        let out = render("{{convert|5}}");
+        assert!(out.contains("tome-template-placeholder"), "got: {out}");
+    }
+
+    #[test]
+    fn lang_template_renders_last_positional_param() {
+        let out = render("{{lang|fr|Élysée}}");
+        assert!(out.contains("Élysée"), "got: {out}");
+        assert!(!out.contains("tome-template-placeholder"), "got: {out}");
+    }
+
+    #[test]
+    fn lang_template_without_params_falls_back_to_placeholder() {
+        let out = render("{{lang}}");
+        assert!(out.contains("tome-template-placeholder"), "got: {out}");
+    }
+
+    #[test]
+    fn ipa_template_renders_first_positional_param() {
+        let out = render("{{IPA|/fonetik/}}");
+        assert!(out.contains("/fonetik/"), "got: {out}");
+        assert!(!out.contains("tome-template-placeholder"), "got: {out}");
+    }
+
+    #[test]
+    fn cite_template_inside_ref_formats_in_footnote() {
+        let out = render("Fact.<ref>{{cite web|title=X|url=https://example.com}}</ref>");
+        assert!(out.contains("<li id=\"ref-1\">"), "got: {out}");
+        assert!(out.contains("tome-citation"), "got: {out}");
+        assert!(out.contains("\u{201C}X\u{201D}"), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://example.com\""),
+            "got: {out}"
+        );
+        assert!(!out.contains("tome-template-placeholder"), "got: {out}");
     }
 
     #[test]

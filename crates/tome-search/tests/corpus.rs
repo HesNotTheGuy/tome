@@ -145,3 +145,156 @@ fn search_returns_tier_correctly_in_hits() {
     let higgs = hits.iter().find(|h| h.title == "Higgs boson").unwrap();
     assert_eq!(higgs.tier, Tier::Cold);
 }
+
+#[test]
+fn exact_title_match_outranks_body_repetition() {
+    // Production reality: 6.8M titles with mostly empty bodies. A doc that
+    // repeats the query word in its body must not outrank the doc whose
+    // title IS the query — that's what the 3x title boost buys.
+    let index = Index::create_in_ram().unwrap();
+    let mut writer = index.writer(15_000_000).unwrap();
+    writer.add(1, "Gravity", "", Tier::Hot).unwrap();
+    writer
+        .add(
+            2,
+            "History of physics",
+            "Gravity gravity gravity gravity gravity. Newton studied gravity. \
+             Einstein reframed gravity as curvature. Gravity gravity gravity.",
+            Tier::Hot,
+        )
+        .unwrap();
+    writer.commit().unwrap();
+
+    let hits = index.search("gravity", 10, &[]).unwrap();
+    assert!(!hits.is_empty());
+    assert_eq!(
+        hits[0].title, "Gravity",
+        "exact title match should rank above heavy body repetition"
+    );
+}
+
+#[test]
+fn fuzzy_fallback_corrects_single_word_typo() {
+    let idx = build_corpus();
+    // "phopton" is "Photon" with one transposed/inserted char — edit
+    // distance 1 from the indexed term "photon".
+    let hits = idx.search("phopton", 10, &[]).unwrap();
+    assert!(!hits.is_empty(), "fuzzy fallback should rescue the typo");
+    assert_eq!(hits[0].title, "Photon");
+}
+
+#[test]
+fn fuzzy_fallback_handles_near_prefix_query() {
+    let idx = build_corpus();
+    // "photo" is distance 1 from "photon" (one deletion). Must not panic;
+    // if anything matches, it should be Photon.
+    let hits = idx.search("photo", 10, &[]).unwrap();
+    for h in &hits {
+        assert_eq!(h.title, "Photon", "unexpected fuzzy hit: {}", h.title);
+    }
+}
+
+#[test]
+fn fuzzy_exact_hits_rank_before_fuzzy_hits_and_dedup() {
+    let index = Index::create_in_ram().unwrap();
+    let mut writer = index.writer(15_000_000).unwrap();
+    writer.add(1, "Photon", "", Tier::Hot).unwrap();
+    writer.add(2, "Proton", "", Tier::Hot).unwrap(); // distance 1 from "photon"
+    writer.commit().unwrap();
+
+    // "photon" matches doc 1 exactly; doc 2 only via fuzzy. Exact first,
+    // and doc 1 must not appear twice even though fuzzy also matches it.
+    let hits = index.search("photon", 10, &[]).unwrap();
+    assert_eq!(hits[0].title, "Photon");
+    let photon_count = hits.iter().filter(|h| h.title == "Photon").count();
+    assert_eq!(photon_count, 1, "fuzzy merge must dedup by page_id");
+}
+
+#[test]
+fn fuzzy_fallback_respects_tier_filter() {
+    let idx = build_corpus();
+    // Photon is Hot. With a Warm/Cold filter, the fuzzy match must be
+    // suppressed too.
+    let hits = idx.search("phopton", 10, &[Tier::Warm, Tier::Cold]).unwrap();
+    assert!(
+        hits.iter().all(|h| h.title != "Photon"),
+        "fuzzy hit leaked through tier filter"
+    );
+
+    // With the matching tier, the fuzzy hit comes back.
+    let hits = idx.search("phopton", 10, &[Tier::Hot]).unwrap();
+    assert!(!hits.is_empty());
+    assert_eq!(hits[0].title, "Photon");
+}
+
+#[test]
+fn multi_word_query_does_not_trigger_fuzzy() {
+    let idx = build_corpus();
+    // "phopton" alone would fuzzy-match Photon, but a multi-word query has
+    // operator/phrase semantics we must not fuzz. ("phopton" matches
+    // nothing exactly and "zzzz" matches nothing at all, so any hit here
+    // could only have come from an unwanted fuzzy fallback.)
+    let hits = idx.search("phopton zzzz", 10, &[]).unwrap();
+    assert!(
+        hits.is_empty(),
+        "multi-word query must not take the fuzzy fallback"
+    );
+}
+
+#[test]
+fn short_token_does_not_trigger_fuzzy() {
+    let idx = build_corpus();
+    // 3-char tokens are below the fuzzy threshold; "pho" matches nothing
+    // exactly and must not fuzzy-match "photon" (it's distance 3 anyway,
+    // but the guard should reject it before any fuzzy query runs).
+    let hits = idx.search("pho", 10, &[]).unwrap();
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn delete_all_then_commit_empties_index() {
+    let idx = build_corpus();
+    assert_eq!(idx.num_docs().unwrap(), 5);
+
+    let mut writer = idx.writer(15_000_000).unwrap();
+    writer.delete_all().unwrap();
+    writer.commit().unwrap();
+
+    assert_eq!(idx.num_docs().unwrap(), 0);
+    let hits = idx.search("photon", 10, &[]).unwrap();
+    assert!(hits.is_empty(), "wiped index must return no hits");
+}
+
+#[test]
+fn num_docs_counts_added_documents() {
+    let index = Index::create_in_ram().unwrap();
+    assert_eq!(index.num_docs().unwrap(), 0);
+
+    let mut writer = index.writer(15_000_000).unwrap();
+    writer.add(1, "Photon", "", Tier::Hot).unwrap();
+    writer.add(2, "Electron", "", Tier::Hot).unwrap();
+    writer.commit().unwrap();
+    assert_eq!(index.num_docs().unwrap(), 2);
+
+    writer.add(3, "Quark", "", Tier::Hot).unwrap();
+    writer.commit().unwrap();
+    assert_eq!(index.num_docs().unwrap(), 3);
+}
+
+#[test]
+fn limit_zero_returns_empty_without_panic() {
+    let idx = build_corpus();
+    // TopDocs panics on a 0 limit; the guard must short-circuit instead.
+    let hits = idx.search("photon", 0, &[]).unwrap();
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn fewer_results_than_limit_does_not_panic() {
+    let idx = build_corpus();
+    // One matching doc, generous limit — exercises the fuzzy-fallback path
+    // (hits.len() < limit) without tripping any 0-limit TopDocs.
+    let hits = idx.search("cooking", 50, &[]).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].title, "Cooking");
+}

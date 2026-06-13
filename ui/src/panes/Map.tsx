@@ -41,6 +41,7 @@ export default function MapPane({ onOpen }: MapProps) {
     "idle",
   );
   const [count, setCount] = useState(0);
+  const [loaded, setLoaded] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [hasBasemap, setHasBasemap] = useState(false);
 
@@ -195,38 +196,77 @@ export default function MapPane({ onOpen }: MapProps) {
 
   useEffect(() => {
     if (!isTauri()) return;
-    setPhase("loading");
-    tome
-      .allPrimaryGeotags()
-      .then((rows: MappedGeotag[]) => {
-        setCount(rows.length);
-        if (rows.length === 0) {
+    let cancelled = false;
+
+    // Page size for geotag fetches. At full enwiki the primary-geotag set is
+    // ~1.5M rows / ~100MB if loaded in one shot, which freezes the webview —
+    // so we stream it in fixed-size pages and feed the map progressively.
+    const PAGE = 50_000;
+
+    // setData the accumulated features onto the articles source. The source
+    // only exists after the map's "load" fires, so defer if we're early.
+    const applyData = (features: GeoJSON.Feature<GeoJSON.Point>[]) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const data: GeoJSON.FeatureCollection<GeoJSON.Point> = {
+        type: "FeatureCollection",
+        features,
+      };
+      const apply = () => {
+        if (cancelled) return;
+        const src = map.getSource("articles") as GeoJSONSource | undefined;
+        if (src) src.setData(data);
+      };
+      if (map.isStyleLoaded() && map.getSource("articles")) apply();
+      else map.once("load", apply);
+    };
+
+    (async () => {
+      setPhase("loading");
+      setLoaded(0);
+      try {
+        const total = await tome.countPrimaryGeotags();
+        if (cancelled) return;
+        setCount(total);
+        if (total === 0) {
           setPhase("empty");
           return;
         }
-        const features: GeoJSON.Feature<GeoJSON.Point>[] = rows.map((g) => ({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [g.lon, g.lat] },
-          properties: { title: g.title, page_id: g.page_id },
-        }));
-        const data: GeoJSON.FeatureCollection<GeoJSON.Point> = {
-          type: "FeatureCollection",
-          features,
-        };
-        const map = mapRef.current;
-        if (!map) return;
-        const apply = () => {
-          const src = map.getSource("articles") as GeoJSONSource | undefined;
-          if (src) src.setData(data);
-        };
-        if (map.isStyleLoaded() && map.getSource("articles")) apply();
-        else map.once("load", apply);
+
+        const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
+        for (let offset = 0; offset < total; offset += PAGE) {
+          const rows: MappedGeotag[] = await tome.primaryGeotagsPage(
+            PAGE,
+            offset,
+          );
+          if (cancelled) return;
+          for (const g of rows) {
+            features.push({
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [g.lon, g.lat] },
+              properties: { title: g.title, page_id: g.page_id },
+            });
+          }
+          setLoaded(features.length);
+          // Feed pins to the map incrementally so they appear as we go.
+          applyData(features);
+          // A short page means the table ran dry — we're done regardless of
+          // the original count (rows may have changed mid-paging).
+          if (rows.length < PAGE) break;
+        }
+
+        if (cancelled) return;
         setPhase("ready");
-      })
-      .catch((e) => {
+      } catch (e) {
+        if (cancelled) return;
         setError(String(e));
         setPhase("error");
-      });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -240,7 +280,10 @@ export default function MapPane({ onOpen }: MapProps) {
             </p>
           </div>
           <div className="text-xs text-tome-muted whitespace-nowrap">
-            {phase === "loading" && "loading…"}
+            {phase === "loading" &&
+              (count > 0
+                ? `Loading pins… ${loaded.toLocaleString()} / ${count.toLocaleString()}`
+                : "loading…")}
             {phase === "ready" && (
               <>
                 {count.toLocaleString()} articles

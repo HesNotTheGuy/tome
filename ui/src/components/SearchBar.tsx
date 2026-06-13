@@ -15,6 +15,9 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
   // or the embedder fails to load, we silently show nothing rather than
   // pollute the dropdown with errors. Lexical search is the primary surface.
   const [semanticHits, setSemanticHits] = useState<EmbeddingHit[]>([]);
+  // Title-prefix autocomplete — instant indexed lookups, the thing people
+  // expect from a Wikipedia search box ("Unit" → "United States").
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -53,6 +56,7 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
     if (query.trim().length < 2) {
       setHits([]);
       setSemanticHits([]);
+      setSuggestions([]);
       return;
     }
     if (!isTauri()) {
@@ -65,6 +69,7 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
         },
       ]);
       setSemanticHits([]);
+      setSuggestions([]);
       return;
     }
     let canceled = false;
@@ -99,6 +104,14 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
           // surfacing to a user mid-search.
           if (!canceled) setSemanticHits([]);
         });
+      tome
+        .titleSuggestions(trimmed, 8)
+        .then((s) => {
+          if (!canceled) setSuggestions(s);
+        })
+        .catch(() => {
+          if (!canceled) setSuggestions([]);
+        });
     }, 120);
     return () => {
       canceled = true;
@@ -112,13 +125,20 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
     setQuery("");
   }
 
-  // Drop semantic hits whose title already appears in the lexical results
-  // — no point showing the same article twice. Comparison is
-  // case-insensitive since lexical hits come back with the canonical
-  // article title and embeddings were stored against that same title.
-  const lexicalTitles = new Set(hits.map((h) => h.title.toLowerCase()));
+  // Avoid showing the same article twice across the three sections. The
+  // prefix suggestions are the top section; lexical and semantic results are
+  // deduped against everything already shown above them. Case-insensitive
+  // since all three carry the canonical article title.
+  const suggestionTitles = new Set(suggestions.map((s) => s.toLowerCase()));
+  const dedupedHits = hits.filter(
+    (h) => !suggestionTitles.has(h.title.toLowerCase()),
+  );
+  const shownTitles = new Set([
+    ...suggestionTitles,
+    ...dedupedHits.map((h) => h.title.toLowerCase()),
+  ]);
   const dedupedSemantic = semanticHits.filter(
-    (s) => !lexicalTitles.has(s.title.toLowerCase()),
+    (s) => !shownTitles.has(s.title.toLowerCase()),
   );
 
   return (
@@ -176,31 +196,54 @@ export default function SearchBar({ onOpenArticle }: SearchBarProps) {
           {error && (
             <div className="p-3 text-sm text-tome-danger">{error}</div>
           )}
-          {!error && hits.length > 0 && (
+
+          {!error && suggestions.length > 0 && (
             <ul className="divide-y divide-tome-border">
-              {hits.map((h) => (
+              {suggestions.map((s) => (
                 <li
-                  key={`lex-${h.page_id}`}
+                  key={`sug-${s}`}
                   onMouseDown={(e) => {
-                    // mousedown so the input doesn't lose focus first and
-                    // dismiss the overlay before pick() runs.
                     e.preventDefault();
-                    pick(h.title);
+                    pick(s);
                   }}
-                  className="p-3 hover:bg-tome-surface-2 cursor-pointer"
+                  className="px-3 py-2 hover:bg-tome-surface-2 cursor-pointer text-sm"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-sm">{h.title}</span>
-                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
-                      {h.tier}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-tome-muted mt-0.5">
-                    score {h.score.toFixed(2)}
-                  </p>
+                  {s}
                 </li>
               ))}
             </ul>
+          )}
+
+          {!error && dedupedHits.length > 0 && (
+            <>
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-tome-muted bg-tome-surface-2 border-y border-tome-border">
+                Matches
+              </div>
+              <ul className="divide-y divide-tome-border">
+                {dedupedHits.map((h) => (
+                  <li
+                    key={`lex-${h.page_id}`}
+                    onMouseDown={(e) => {
+                      // mousedown so the input doesn't lose focus first and
+                      // dismiss the overlay before pick() runs.
+                      e.preventDefault();
+                      pick(h.title);
+                    }}
+                    className="p-3 hover:bg-tome-surface-2 cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm">{h.title}</span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-tome-surface-2 text-tome-muted">
+                        {h.tier}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-tome-muted mt-0.5">
+                      score {h.score.toFixed(2)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
 
           {!error && dedupedSemantic.length > 0 && (

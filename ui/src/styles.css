@@ -170,6 +170,76 @@
     color: var(--tome-text-muted);
     @apply inline-block px-2 py-0.5 rounded text-xs;
   }
+
+  /* -----------------------------------------------------------------------
+   * Local-render template approximations emitted by tome-wikitext's
+   * Renderer (offline path). Themed to match the API-HTML infobox styling
+   * above so an article looks consistent regardless of which path served it.
+   * --------------------------------------------------------------------- */
+  .tome-article .tome-infobox {
+    background-color: var(--tome-surface);
+    border: 1px solid var(--tome-border);
+    float: right;
+    width: 100%;
+    max-width: 22rem;
+    margin: 0 0 1rem 1rem;
+    @apply rounded text-sm overflow-hidden;
+  }
+  @media (max-width: 720px) {
+    .tome-article .tome-infobox {
+      float: none;
+      margin: 1rem 0;
+      max-width: 100%;
+    }
+  }
+  .tome-article .tome-infobox-title {
+    background-color: var(--tome-surface-2);
+    font-weight: 600;
+    text-align: center;
+    @apply px-3 py-2;
+  }
+  .tome-article table.tome-infobox-params {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .tome-article .tome-infobox-params th,
+  .tome-article .tome-infobox-params td {
+    border-bottom: 1px solid var(--tome-border);
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  .tome-article .tome-infobox-params th {
+    color: var(--tome-text-muted);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tome-article .tome-citation {
+    color: var(--tome-text-muted);
+  }
+
+  /* Heading anchors (id="s-…") emitted by the renderer. Keep a targeted
+   * heading clear of the sticky Reader header when jumped to from the TOC. */
+  .tome-article h2[id],
+  .tome-article h3[id],
+  .tome-article h4[id],
+  .tome-article h5[id],
+  .tome-article h6[id] {
+    scroll-margin-top: 5rem;
+  }
+
+  /* Table of contents (built by the Reader from heading anchors). */
+  .tome-toc {
+    background-color: var(--tome-surface);
+    border: 1px solid var(--tome-border);
+    @apply rounded text-sm my-4 p-3;
+  }
+  .tome-toc a {
+    color: var(--tome-link);
+  }
+  .tome-toc a:hover {
+    text-decoration: underline;
+  }
   .tome-ref {
     color: var(--tome-link);
   }

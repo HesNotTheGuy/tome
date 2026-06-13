@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import Library from "./panes/Library";
 import Reader from "./panes/Reader";
@@ -11,6 +11,7 @@ import Settings from "./panes/Settings";
 import { PresetPicker, ThemeToggle, useTheme } from "./components/Theme";
 import FirstRunWizard from "./components/FirstRunWizard";
 import SearchBar from "./components/SearchBar";
+import { DialogProvider } from "./components/Dialog";
 import { tome } from "./service";
 import { isTauri } from "./types";
 
@@ -37,11 +38,41 @@ const PANE_LABEL: Record<Pane, string> = {
 
 export default function App() {
   const [pane, setPane] = useState<Pane>("library");
-  const [activeTitle, setActiveTitle] = useState<string | null>(null);
+  // Article navigation history — a linear back/forward stack like a browser.
+  // `stack` is the visited titles, `index` the current position. Opening a
+  // new article truncates any forward entries (standard browser semantics);
+  // back/forward just move the index. Kept as one object so a push updates
+  // both fields atomically.
+  const [nav, setNav] = useState<{ stack: string[]; index: number }>({
+    stack: [],
+    index: -1,
+  });
+  const activeTitle = nav.index >= 0 ? nav.stack[nav.index]! : null;
+  const canGoBack = nav.index > 0;
+  const canGoForward = nav.index >= 0 && nav.index < nav.stack.length - 1;
   // Wizard visibility: undefined while we're checking, true/false after.
   // Avoids a flash of the empty Library before the wizard mounts.
   const [showWizard, setShowWizard] = useState<boolean | undefined>(undefined);
   useTheme(); // attaches dark-mode class + data-preset to <html>
+
+  const navigate = useCallback((title: string) => {
+    setNav((n) => {
+      // Re-opening the current article is a no-op — no duplicate stack entry.
+      if (n.index >= 0 && n.stack[n.index] === title) return n;
+      const stack = n.stack.slice(0, n.index + 1);
+      stack.push(title);
+      return { stack, index: stack.length - 1 };
+    });
+  }, []);
+
+  const goBack = useCallback(() => {
+    setNav((n) => (n.index > 0 ? { ...n, index: n.index - 1 } : n));
+  }, []);
+  const goForward = useCallback(() => {
+    setNav((n) =>
+      n.index < n.stack.length - 1 ? { ...n, index: n.index + 1 } : n,
+    );
+  }, []);
 
   useEffect(() => {
     if (activeTitle) setPane("reader");
@@ -74,67 +105,76 @@ export default function App() {
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
-      <header
-        className="flex items-center justify-between border-b border-tome-border px-4 py-2 backdrop-blur"
-        style={{ backgroundColor: "color-mix(in srgb, var(--tome-surface) 60%, transparent)" }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="font-bold text-lg tracking-tight">Tome</span>
-          <span className="text-xs text-tome-muted hidden sm:inline">
-            offline Wikipedia
-          </span>
-        </div>
-        <nav className="flex items-center gap-1">
-          {(Object.keys(PANE_LABEL) as Pane[]).map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setPane(p)}
-              className={
-                "px-3 py-1 rounded text-sm transition-colors " +
-                (pane === p
-                  ? "bg-tome-surface-2 text-tome-text"
-                  : "text-tome-muted hover:bg-tome-surface-2")
-              }
-            >
-              {PANE_LABEL[p]}
-            </button>
-          ))}
-        </nav>
-        <div className="flex items-center gap-2">
-          <SearchBar onOpenArticle={(title) => setActiveTitle(title)} />
-          <RandomButton onOpen={(title) => setActiveTitle(title)} />
-          <PresetPicker />
-          <ThemeToggle />
-        </div>
-      </header>
+    <DialogProvider>
+      <div className="h-full flex flex-col">
+        <header
+          className="flex items-center justify-between border-b border-tome-border px-4 py-2 backdrop-blur"
+          style={{ backgroundColor: "color-mix(in srgb, var(--tome-surface) 60%, transparent)" }}
+        >
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-lg tracking-tight">Tome</span>
+            <span className="text-xs text-tome-muted hidden sm:inline">
+              offline Wikipedia
+            </span>
+          </div>
+          <nav className="flex items-center gap-1">
+            {(Object.keys(PANE_LABEL) as Pane[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPane(p)}
+                className={
+                  "px-3 py-1 rounded text-sm transition-colors " +
+                  (pane === p
+                    ? "bg-tome-surface-2 text-tome-text"
+                    : "text-tome-muted hover:bg-tome-surface-2")
+                }
+              >
+                {PANE_LABEL[p]}
+              </button>
+            ))}
+          </nav>
+          <div className="flex items-center gap-2">
+            <SearchBar onOpenArticle={navigate} />
+            <RandomButton onOpen={navigate} />
+            <PresetPicker />
+            <ThemeToggle />
+          </div>
+        </header>
 
-      <main className="flex-1 overflow-auto">
-        {pane === "library" && <Library onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "reader" && (
-          <Reader title={activeTitle} onNavigate={(t) => setActiveTitle(t)} />
+        <main className="flex-1 overflow-auto">
+          {pane === "library" && <Library onOpen={navigate} />}
+          {pane === "reader" && (
+            <Reader
+              title={activeTitle}
+              onNavigate={navigate}
+              onBack={goBack}
+              onForward={goForward}
+              canGoBack={canGoBack}
+              canGoForward={canGoForward}
+            />
+          )}
+          {pane === "browse" && <Browse onOpen={navigate} />}
+          {pane === "map" && <MapPane onOpen={navigate} />}
+          {pane === "history" && <History onOpen={navigate} />}
+          {pane === "bookmarks" && <Bookmarks onOpen={navigate} />}
+          {pane === "archive" && <Archive onOpen={navigate} />}
+          {pane === "settings" && <Settings />}
+        </main>
+
+        <StatusBar />
+
+        {showWizard && (
+          <FirstRunWizard
+            onComplete={() => {
+              setShowWizard(false);
+              setPane("library");
+            }}
+            onSkip={() => setShowWizard(false)}
+          />
         )}
-        {pane === "browse" && <Browse onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "map" && <MapPane onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "history" && <History onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "bookmarks" && <Bookmarks onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "archive" && <Archive onOpen={(t) => setActiveTitle(t)} />}
-        {pane === "settings" && <Settings />}
-      </main>
-
-      <StatusBar />
-
-      {showWizard && (
-        <FirstRunWizard
-          onComplete={() => {
-            setShowWizard(false);
-            setPane("library");
-          }}
-          onSkip={() => setShowWizard(false)}
-        />
-      )}
-    </div>
+      </div>
+    </DialogProvider>
   );
 }
 
@@ -197,13 +237,38 @@ function RandomButton({ onOpen }: { onOpen: (title: string) => void }) {
 }
 
 function StatusBar() {
+  const [version, setVersion] = useState("");
+  const [offline, setOffline] = useState(false);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    // Real bundled version from tauri.conf.json, not a hardcoded string.
+    import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion().then(setVersion))
+      .catch(() => {});
+    // Reflect offline mode, and keep it current if toggled in Settings.
+    const sync = () => {
+      tome
+        .offlineMode()
+        .then(setOffline)
+        .catch(() => {});
+    };
+    sync();
+    const id = setInterval(sync, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <footer
       className="border-t border-tome-border px-4 py-1 text-xs text-tome-muted flex items-center justify-between"
       style={{ backgroundColor: "color-mix(in srgb, var(--tome-surface) 60%, transparent)" }}
     >
-      <span>v0.1.0</span>
-      <span>under construction</span>
+      <span>{version ? `Tome v${version}` : "Tome"}</span>
+      {offline && (
+        <span className="text-tome-success" title="No network access — reading from local data only">
+          ● Offline mode
+        </span>
+      )}
     </footer>
   );
 }

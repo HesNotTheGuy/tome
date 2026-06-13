@@ -85,6 +85,18 @@ pub struct Settings {
     /// privacy-conscious choice.
     #[serde(default = "default_true")]
     pub history_enabled: bool,
+    /// Master "this machine is offline" switch. When `true`, the kill
+    /// switch is engaged at startup and article reads never attempt the
+    /// network — every operation resolves from local data immediately.
+    /// Persisted so an offline machine stays offline across restarts.
+    #[serde(default)]
+    pub offline_mode: bool,
+    /// Explicit path to a user-supplied GGUF chat model (side-loaded from
+    /// a USB drive instead of downloaded from HuggingFace). When set and
+    /// the file exists, the chat backend uses it directly and the
+    /// download flow is skipped entirely.
+    #[serde(default)]
+    pub chat_model_path: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -95,6 +107,8 @@ impl Default for Settings {
             recommendations_enabled: true,
             map_source_path: None,
             history_enabled: true,
+            offline_mode: false,
+            chat_model_path: None,
         }
     }
 }
@@ -156,6 +170,8 @@ mod tests {
             recommendations_enabled: false,
             map_source_path: Some(PathBuf::from("/maps/world.pmtiles")),
             history_enabled: false,
+            offline_mode: true,
+            chat_model_path: Some(PathBuf::from("/models/chat.gguf")),
         };
         s.save(dir.path()).unwrap();
         let loaded = Settings::load(dir.path());

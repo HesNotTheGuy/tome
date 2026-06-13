@@ -172,6 +172,73 @@ async fn rate_limit_paces_concurrent_calls() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn single_attempt_transport_error_fails_after_one_call_without_sleeping() {
+    // Plenty of scripted errors available — the single-attempt path must
+    // consume exactly one and never enter the backoff schedule.
+    let transport = Arc::new(MockTransport::new(vec![
+        MockResponse::network_error("connection refused"),
+        MockResponse::network_error("connection refused"),
+        MockResponse::network_error("connection refused"),
+    ]));
+    let kill = Arc::new(KillSwitch::new());
+    let client = MediaWikiClient::new(ClientConfig::default(), transport.clone(), kill);
+
+    let start = Instant::now();
+    let err = client
+        .fetch_html_single_attempt("Photon", None)
+        .await
+        .unwrap_err();
+    let elapsed = Instant::now().saturating_duration_since(start);
+
+    assert!(matches!(err, TomeError::Api(_)));
+    assert_eq!(
+        transport.requests_made(),
+        1,
+        "single-attempt must make exactly one transport call"
+    );
+    assert_eq!(
+        elapsed,
+        Duration::ZERO,
+        "single-attempt must never sleep; got {elapsed:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn single_attempt_success_returns_body() {
+    let transport = Arc::new(MockTransport::new(vec![MockResponse::ok(
+        200,
+        b"<html>Photon</html>".to_vec(),
+    )]));
+    let kill = Arc::new(KillSwitch::new());
+    let client = MediaWikiClient::new(ClientConfig::default(), transport.clone(), kill);
+
+    let html = client
+        .fetch_html_single_attempt("Photon", None)
+        .await
+        .unwrap();
+    assert_eq!(html, "<html>Photon</html>");
+    assert_eq!(transport.requests_made(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn single_attempt_respects_kill_switch_without_transport_call() {
+    let transport = Arc::new(MockTransport::new(vec![MockResponse::ok(
+        200,
+        b"never reached".to_vec(),
+    )]));
+    let kill = Arc::new(KillSwitch::new());
+    let client = MediaWikiClient::new(ClientConfig::default(), transport.clone(), kill.clone());
+
+    kill.engage();
+    let err = client
+        .fetch_html_single_attempt("X", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TomeError::KillSwitch));
+    assert_eq!(transport.requests_made(), 0);
+}
+
+#[tokio::test(start_paused = true)]
 async fn revision_specific_url_caches_independently() {
     let transport = Arc::new(MockTransport::new(vec![
         MockResponse::ok(200, b"latest".to_vec()),

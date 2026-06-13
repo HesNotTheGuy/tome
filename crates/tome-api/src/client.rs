@@ -91,6 +91,26 @@ impl MediaWikiClient {
             .map_err(|e| TomeError::Api(format!("response body is not utf-8: {e}")))
     }
 
+    /// Fetch rendered HTML with a SINGLE attempt — no retries, no backoff.
+    /// For callers with a local fallback (the Cold-tier read path): when the
+    /// machine is offline, burning the full retry budget (~63s) before a
+    /// ~300ms local render is the difference between "offline app" and
+    /// "broken app". Still fully governed: kill switch, rate limit, and
+    /// breaker accounting all apply.
+    pub async fn fetch_html_single_attempt(
+        &self,
+        title: &str,
+        revision_id: Option<u64>,
+    ) -> Result<String> {
+        let url = build_html_url(&self.config.base_url, title, revision_id)?;
+        let request = HttpRequest::get(url)
+            .header("User-Agent", &self.config.user_agent)
+            .header("Accept", "text/html");
+        let response = self.send_with_governance_attempts(request, 1).await?;
+        String::from_utf8(response.body)
+            .map_err(|e| TomeError::Api(format!("response body is not utf-8: {e}")))
+    }
+
     /// Fetch the latest `limit` revisions for an article from the action API.
     /// Returns newest-first (Wikipedia's default). Limit is clamped to 500
     /// (the API's per-request maximum).
@@ -115,6 +135,19 @@ impl MediaWikiClient {
     }
 
     async fn send_with_governance(&self, request: HttpRequest) -> Result<HttpResponse> {
+        self.send_with_governance_attempts(request, self.config.max_attempts)
+            .await
+    }
+
+    /// The governance pipeline with a parameterizable attempt budget.
+    /// `send_with_governance` passes the configured `max_attempts`;
+    /// `fetch_html_single_attempt` passes 1. Every protection (kill switch,
+    /// breaker, cache, rate limit, request log) behaves identically.
+    async fn send_with_governance_attempts(
+        &self,
+        request: HttpRequest,
+        max_attempts: u32,
+    ) -> Result<HttpResponse> {
         if self.kill_switch.is_engaged() {
             return Err(TomeError::KillSwitch);
         }
@@ -131,7 +164,7 @@ impl MediaWikiClient {
         }
 
         let mut backoff = BackoffState::new();
-        for attempt in 1..=self.config.max_attempts {
+        for attempt in 1..=max_attempts {
             self.rate_limit.acquire().await;
 
             let log_method = request.method.clone();
@@ -172,7 +205,7 @@ impl MediaWikiClient {
                     if self.breaker.is_open() {
                         return Err(TomeError::CircuitBreakerOpen);
                     }
-                    if attempt >= self.config.max_attempts {
+                    if attempt >= max_attempts {
                         return Err(TomeError::Api(format!(
                             "max retries exceeded: status {status}"
                         )));
@@ -197,7 +230,7 @@ impl MediaWikiClient {
                     if self.breaker.is_open() {
                         return Err(TomeError::CircuitBreakerOpen);
                     }
-                    if attempt >= self.config.max_attempts {
+                    if attempt >= max_attempts {
                         return Err(TomeError::Api(format!("transport: {err_string}")));
                     }
                     backoff.record_failure();

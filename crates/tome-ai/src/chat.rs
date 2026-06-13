@@ -86,6 +86,11 @@ pub struct ChatConfig {
     pub temperature: f32,
     /// Hard cap on output tokens. Keeps a runaway generation bounded.
     pub max_tokens: u32,
+    /// Explicit path to a user-supplied GGUF file (side-loaded from local
+    /// media instead of downloaded). When set and the file exists, it wins
+    /// over the download cache entirely.
+    #[serde(default)]
+    pub explicit_model_path: Option<PathBuf>,
 }
 
 impl Default for ChatConfig {
@@ -96,6 +101,7 @@ impl Default for ChatConfig {
             model_file: "phi-4-mini-instruct-Q4_K_M.gguf".into(),
             temperature: 0.7,
             max_tokens: 512,
+            explicit_model_path: None,
         }
     }
 }
@@ -440,6 +446,10 @@ mod tests {
         assert!(c.model_file.ends_with(".gguf"));
         assert!(c.temperature >= 0.0 && c.temperature <= 2.0);
         assert!(c.max_tokens > 0);
+        assert!(
+            c.explicit_model_path.is_none(),
+            "stock config must use the downloader, not a side-loaded path"
+        );
     }
 
     #[test]

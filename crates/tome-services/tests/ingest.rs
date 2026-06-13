@@ -59,6 +59,8 @@ fn build_facade() -> (Tome, NamedTempFile, NamedTempFile, TempDir) {
         recommendations_enabled: true,
         map_source_path: None,
         history_enabled: true,
+        offline_mode: false,
+        chat_model_path: None,
     }
     .save(data_dir.path())
     .unwrap();

@@ -115,6 +115,26 @@ CREATE INDEX IF NOT EXISTS idx_bookmarks_folder ON bookmarks(folder_id);
 CREATE INDEX IF NOT EXISTS idx_bookmark_folders_parent ON bookmark_folders(parent_id);
 "#;
 
+// Query-shaped indexes for enwiki scale.
+//
+// idx_categorylinks_to_type: `related_to` self-joins categorylinks on cl_to
+// and filters cl_type = 'page' on both sides. With only idx_categorylinks_to
+// (cl_to alone), every probe still has to fetch the row to test cl_type and
+// read cl_from — at hundreds of millions of categorylinks rows that's a
+// random-IO storm. Putting (cl_to, cl_type, cl_from) in one index lets SQLite
+// satisfy the join key, the type filter, AND the output column from the index
+// alone (a covering index), never touching the base table.
+//
+// idx_articles_title_nocase: articles.title already has a UNIQUE index, but
+// it's BINARY-collated, so a case-insensitive prefix LIKE can't use it and
+// falls back to a full scan. A NOCASE-collated index makes
+// `title LIKE 'pref%'` (SQLite LIKE is ASCII case-insensitive) an indexed
+// range scan — the difference between search-as-you-type and search-as-you-wait.
+const MIGRATION_7: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_categorylinks_to_type ON categorylinks(cl_to, cl_type, cl_from);
+CREATE INDEX IF NOT EXISTS idx_articles_title_nocase ON articles(title COLLATE NOCASE);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")
         .map_err(|e| TomeError::Storage(format!("create version table: {e}")))?;
@@ -186,6 +206,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .map_err(|e| TomeError::Storage(format!("record migration 6: {e}")))?;
     }
 
+    if from < 7 {
+        conn.execute_batch(MIGRATION_7)
+            .map_err(|e| TomeError::Storage(format!("apply migration 7: {e}")))?;
+        conn.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            params![7_i32],
+        )
+        .map_err(|e| TomeError::Storage(format!("record migration 7: {e}")))?;
+    }
+
     Ok(())
 }
 
@@ -198,7 +228,7 @@ mod tests {
     /// The highest migration version this codebase ships. Bump this in lockstep
     /// with new MIGRATION_N constants; the assertion below will catch
     /// mismatches.
-    const CURRENT_VERSION: i32 = 6;
+    const CURRENT_VERSION: i32 = 7;
 
     #[test]
     fn fresh_db_reaches_current_version() {
@@ -239,6 +269,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "geotags table missing after migrate");
+    }
+
+    #[test]
+    fn migration_7_indexes_present_after_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for name in ["idx_categorylinks_to_type", "idx_articles_title_nocase"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "index {name} missing after migrate");
+        }
     }
 
     #[test]

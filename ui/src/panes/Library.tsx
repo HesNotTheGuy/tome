@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import PathField from "../components/PathField";
 import { tome } from "../service";
 import { relativeTime } from "../time";
 import { HistoryEntry, InstalledModule, isTauri } from "../types";
@@ -203,13 +204,13 @@ function ImportSection({ onComplete }: { onComplete: () => void }) {
         . For now, modules install with the spec&apos;s explicit_titles as
         members; category resolution lands in a follow-up.
       </p>
-      <input
-        type="text"
+      <PathField
         value={path}
-        onChange={(e) => setPath(e.target.value)}
-        disabled={phase === "running"}
+        onChange={setPath}
+        mode="openFile"
+        filters={[{ name: "TOML module", extensions: ["toml"] }]}
         placeholder="/path/to/module.toml"
-        className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
+        disabled={phase === "running"}
       />
       <div className="flex items-center justify-between gap-3">
         <button

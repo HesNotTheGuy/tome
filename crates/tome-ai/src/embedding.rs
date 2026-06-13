@@ -77,8 +77,13 @@ mod fastembed_impl {
                 .with_cache_dir(cache_dir)
                 .with_show_download_progress(false);
 
-            let model = TextEmbedding::try_new(opts)
-                .map_err(|e| TomeError::Other(format!("init BGE-small embedder: {e}")))?;
+            let model = TextEmbedding::try_new(opts).map_err(|e| {
+                TomeError::Other(format!(
+                    "init BGE-small embedder: {e} — if this machine is offline, copy \
+                     the ai/models folder from a machine where Tome has already \
+                     downloaded it (see docs/OFFLINE-SURVIVAL-KIT.md)"
+                ))
+            })?;
 
             Ok(Self {
                 inner: Mutex::new(model),

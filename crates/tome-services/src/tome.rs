@@ -1,6 +1,7 @@
 //! The `Tome` facade — the only public surface the UI depends on.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
@@ -80,6 +81,13 @@ pub struct Tome {
     /// re-read the model from disk, making the second question feel
     /// hung.
     chat_engine: OnceLock<Arc<LlamaChatEngine>>,
+    /// Cooperative cancel flag for the long-running ingest/embed loops.
+    /// Each such operation resets it to `false` at the start and polls it
+    /// periodically; [`Tome::cancel_ingest`] sets it `true` so the UI's
+    /// Cancel button can stop a 30-minute enwiki ingest without killing
+    /// the app. Shared (`Arc`) so a cancel issued on one thread is seen by
+    /// the worker thread running the ingest.
+    ingest_cancel: Arc<AtomicBool>,
 }
 
 impl Tome {
@@ -103,7 +111,23 @@ impl Tome {
             prefer_api_for_cold: true,
             embedder: OnceLock::new(),
             chat_engine: OnceLock::new(),
+            ingest_cancel: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Signal any in-flight ingest/embed loop to stop at its next checkpoint.
+    /// Safe to call when nothing is running (the flag is reset at the start of
+    /// each operation). Rows already committed are kept — re-running the
+    /// ingest resumes from where it left off.
+    pub fn cancel_ingest(&self) {
+        self.ingest_cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Reset the cancel flag at the start of a long operation and hand back the
+    /// shared handle to poll/pass into the parser.
+    fn begin_cancelable(&self) -> Arc<AtomicBool> {
+        self.ingest_cancel.store(false, Ordering::Relaxed);
+        self.ingest_cancel.clone()
     }
 
     /// Lazy-init the chat engine. First call constructs and stashes;
@@ -263,7 +287,18 @@ impl Tome {
         stream_length: Option<u64>,
     ) -> Result<ArticleResponse> {
         if self.prefer_api_for_cold {
-            match self.api.fetch_html(title, revision_id).await {
+            // SINGLE attempt, no retries: this path has a perfect local
+            // fallback (the dump), so spending the full ~63s retry budget
+            // before falling back would turn a disconnected machine into a
+            // frozen one. One quick try — if the network's there we get the
+            // richer Parsoid HTML; if not, we drop straight to the local
+            // render. (The "not in store" path above still uses the full
+            // retry budget because it has no fallback.)
+            match self
+                .api
+                .fetch_html_single_attempt(title, revision_id)
+                .await
+            {
                 Ok(html) => {
                     return Ok(ArticleResponse {
                         title: title.to_string(),
@@ -333,6 +368,22 @@ impl Tome {
         };
         let limit = limit.clamp(1, MAX_LIMIT);
         self.search.search(query, limit, tier_filter)
+    }
+
+    /// Title-prefix suggestions for search-as-you-type, e.g. "Unit" →
+    /// ["United States", "United Kingdom", …]. Backed by an indexed
+    /// case-insensitive SQLite prefix scan (instant even at 6.8M titles),
+    /// so it works the moment the index is ingested and needs no Tantivy
+    /// commit. Redirect pages are titles too, so "USA" surfaces here and
+    /// resolves to "United States" when opened (see [`Tome::read_article`]).
+    pub fn title_suggestions(&self, prefix: &str, limit: u32) -> Result<Vec<String>> {
+        self.storage.titles_with_prefix(prefix, limit)
+    }
+
+    /// Number of searchable documents in the full-text index. Lets the UI
+    /// show "N titles searchable" and detect an un-ingested (empty) index.
+    pub fn search_doc_count(&self) -> Result<u64> {
+        self.search.num_docs()
     }
 
     /// Install a module given pre-resolved member titles. Category resolution
@@ -426,6 +477,44 @@ impl Tome {
         } else {
             self.api.kill_switch().disengage();
         }
+    }
+
+    /// Whether the user has declared this machine offline. Persisted in
+    /// settings; the kill switch reflects it at runtime.
+    pub fn offline_mode(&self) -> bool {
+        self.settings().offline_mode
+    }
+
+    /// Turn offline mode on/off. Persists the choice AND engages/disengages
+    /// the kill switch so the decision takes effect immediately and survives
+    /// restart (the kill switch itself is in-memory; `apply_offline_mode` at
+    /// startup re-engages it from this saved flag). With offline mode on,
+    /// every article read resolves from local data with no network attempt.
+    pub fn set_offline_mode(&self, enabled: bool) -> Result<()> {
+        self.save_settings(|s| s.offline_mode = enabled)?;
+        self.set_kill_switch(enabled);
+        Ok(())
+    }
+
+    /// Re-apply the persisted offline-mode flag to the in-memory kill switch.
+    /// Call once at startup so an offline machine stays offline across
+    /// restarts without the user re-toggling anything.
+    pub fn apply_offline_mode_on_startup(&self) {
+        if self.settings().offline_mode {
+            self.api.kill_switch().engage();
+        }
+    }
+
+    /// Path to a user-supplied (side-loaded) GGUF chat model, if set.
+    pub fn chat_model_path(&self) -> Option<PathBuf> {
+        self.settings().chat_model_path
+    }
+
+    /// Point Tome at a side-loaded GGUF model (or clear it with `None` to
+    /// fall back to the HuggingFace downloader). Persisted so the chat engine
+    /// picks it up on next load.
+    pub fn set_chat_model_path(&self, path: Option<PathBuf>) -> Result<()> {
+        self.save_settings(|s| s.chat_model_path = path)
     }
 
     pub fn breaker_open(&self) -> bool {
@@ -662,9 +751,22 @@ impl Tome {
     }
 
     /// Stream-parse a Wikipedia multistream index file (`*-multistream-index.txt.bz2`)
-    /// and upsert every entry as Cold-tier metadata. The full index is
-    /// ~6.5M lines for English Wikipedia; this typically completes in 30-90s
-    /// on an SSD.
+    /// and upsert every entry as Cold-tier metadata, AND populate the full-text
+    /// search index with every title. The full index is ~6.5M lines for English
+    /// Wikipedia; on an SSD the metadata pass is 30-90s and the search-index
+    /// build adds a comparable amount again (title-only docs), so budget
+    /// roughly 1-3 minutes total for enwiki.
+    ///
+    /// The search index is rebuilt from scratch (`delete_all` up front) so a
+    /// re-ingest of a newer dump never leaves stale or duplicated entries —
+    /// Tantivy has no upsert, unlike the SQLite metadata which dedupes by
+    /// page_id. Bodies are empty (Cold tier holds no content); titles are what
+    /// the search box matches against.
+    ///
+    /// Cancelable via [`Tome::cancel_ingest`]: returns [`TomeError::Cancelled`]
+    /// if interrupted. Cold metadata committed before the cancel is kept (each
+    /// batch is its own SQLite transaction); the search index, committed once
+    /// at the end, is simply left as it was — re-running rebuilds it.
     ///
     /// `on_progress` is called every ~10K entries with the running count, so
     /// the UI can show a live counter without an event channel.
@@ -672,10 +774,17 @@ impl Tome {
     where
         F: FnMut(u64),
     {
+        const SEARCH_WRITER_BUFFER: usize = 50 * 1024 * 1024;
+
         let started = Instant::now();
+        let cancel = self.begin_cancelable();
         let file = std::fs::File::open(index_path)
             .map_err(|e| TomeError::Dump(format!("open index {index_path:?}: {e}")))?;
         let reader = IndexReader::new(file);
+
+        // Rebuild the search index from a clean slate.
+        let mut writer = self.search.writer(SEARCH_WRITER_BUFFER)?;
+        writer.delete_all()?;
 
         let mut batch: Vec<(u64, String, u64)> = Vec::with_capacity(INGEST_BATCH_SIZE);
         let mut total: u64 = 0;
@@ -683,8 +792,14 @@ impl Tome {
 
         for entry in reader {
             let entry = entry?;
+            // Index the title for search before the tuple is moved into the
+            // cold batch. Body empty: Cold tier stores no content.
+            writer.add(entry.page_id, &entry.title, "", Tier::Cold)?;
             batch.push((entry.page_id, entry.title, entry.stream_offset));
             if batch.len() >= INGEST_BATCH_SIZE {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(TomeError::Cancelled);
+                }
                 let n = self.storage.batch_upsert_cold(&batch)?;
                 total += n;
                 batch.clear();
@@ -698,6 +813,9 @@ impl Tome {
             let n = self.storage.batch_upsert_cold(&batch)?;
             total += n;
         }
+
+        // Single commit makes every indexed title queryable at once.
+        writer.commit()?;
         on_progress(total);
 
         // Remember the index path so the UI can pre-fill it next launch.
@@ -718,8 +836,9 @@ impl Tome {
         F: FnMut(u64),
     {
         let started = Instant::now();
+        let cancel = self.begin_cancelable();
         let mut all: Vec<Geotag> = Vec::new();
-        crate::geotag_ingest::parse_file(path, |g| all.push(g))?;
+        crate::geotag_ingest::parse_file(path, &cancel, |g| all.push(g))?;
 
         let mut total = 0_u64;
         let mut next_progress = 10_000_u64;
@@ -754,9 +873,26 @@ impl Tome {
     }
 
     /// Every primary geotag whose article we've indexed, joined with its
-    /// title. Powers the Map pane.
+    /// title. Powers the Map pane. NOTE: at full enwiki this is ~1M rows /
+    /// ~100 MB in one payload — prefer the paged API below for the live Map;
+    /// this is kept for small corpora and tests.
     pub fn all_primary_geotags(&self) -> Result<Vec<MappedGeotag>> {
         self.storage.all_primary_geotags()
+    }
+
+    /// Total number of mappable primary geotags. The Map pane uses this with
+    /// [`Tome::primary_geotags_page`] to stream pins in pages instead of one
+    /// multi-hundred-MB IPC payload that would freeze the webview at enwiki
+    /// scale.
+    pub fn count_primary_geotags(&self) -> Result<u64> {
+        self.storage.count_primary_geotags()
+    }
+
+    /// One stable page of primary geotags (ordered by page_id). Callers walk
+    /// `offset` from 0 in `limit`-sized steps until they've fetched
+    /// [`Tome::count_primary_geotags`] rows.
+    pub fn primary_geotags_page(&self, limit: u32, offset: u64) -> Result<Vec<MappedGeotag>> {
+        self.storage.primary_geotags_page(limit, offset)
     }
 
     /// Stream-parse a Wikipedia `categorylinks.sql.gz` and bulk-insert each
@@ -772,6 +908,7 @@ impl Tome {
         F: FnMut(u64),
     {
         let started = Instant::now();
+        let cancel = self.begin_cancelable();
         let mut buffer: Vec<CategoryLink> = Vec::with_capacity(INGEST_BATCH_SIZE);
         let mut total = 0_u64;
         let mut next_progress = INGEST_PROGRESS_INTERVAL;
@@ -781,7 +918,7 @@ impl Tome {
         // a Result return). We capture into this Option and check after.
         let mut callback_err: Option<TomeError> = None;
 
-        crate::category_ingest::parse_file(path, |link| {
+        crate::category_ingest::parse_file(path, &cancel, |link| {
             if callback_err.is_some() {
                 return;
             }
@@ -870,13 +1007,14 @@ impl Tome {
         F: FnMut(u64),
     {
         let started = Instant::now();
+        let cancel = self.begin_cancelable();
         let mut buffer: Vec<Redirect> = Vec::with_capacity(INGEST_BATCH_SIZE);
         let mut total = 0_u64;
         let mut next_progress = INGEST_PROGRESS_INTERVAL;
         let storage = self.storage.clone();
         let mut callback_err: Option<TomeError> = None;
 
-        crate::redirect_ingest::parse_file(path, |r| {
+        crate::redirect_ingest::parse_file(path, &cancel, |r| {
             if callback_err.is_some() {
                 return;
             }
@@ -1040,6 +1178,10 @@ impl Tome {
     fn chat_config(&self) -> ChatConfig {
         ChatConfig {
             cache_dir: self.data_dir.join("ai").join("chat-models"),
+            // A side-loaded model path (set from a USB drive) wins over the
+            // downloader entirely — this is how the chat feature works fully
+            // offline. `None` keeps the default download-cache behavior.
+            explicit_model_path: self.settings().chat_model_path,
             ..ChatConfig::default()
         }
     }

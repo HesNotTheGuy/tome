@@ -33,6 +33,12 @@ tokio = { workspace = true, optional = true }
 # on Windows, Xcode CLT on macOS, gcc on Linux). Optional.
 llama-cpp-2 = { version = "0.1", optional = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+# `download_chat_model` is `async fn` even in the no-feature stub, so its
+# tests need a runtime. Workspace tokio ("full") provides rt + macros.
+tokio = { workspace = true }
+
 [features]
 default = []
 # Pulls in fastembed + ONNX Runtime. Adds substantial compile time and

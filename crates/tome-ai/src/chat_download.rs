@@ -39,7 +39,15 @@ pub fn chat_model_path(config: &ChatConfig) -> Option<PathBuf> {
 
 /// Where this config's model file would live, regardless of whether it's
 /// downloaded yet. Used by callers that want to log or display the path.
+///
+/// When `explicit_model_path` is set, that path is returned verbatim: the
+/// user told us exactly where the model lives (side-loaded from a USB
+/// drive or network share), so the download cache layout is irrelevant —
+/// the explicit path IS the model location.
 pub fn expected_path(config: &ChatConfig) -> PathBuf {
+    if let Some(explicit) = &config.explicit_model_path {
+        return explicit.clone();
+    }
     config
         .cache_dir
         .join(config.model_repo.replace('/', "--"))
@@ -49,6 +57,24 @@ pub fn expected_path(config: &ChatConfig) -> PathBuf {
 /// Whether the model file already exists on disk. Cheap; just a stat call.
 pub fn is_present(config: &ChatConfig) -> bool {
     expected_path(config).is_file()
+}
+
+/// Honor a user-supplied `explicit_model_path` ahead of any download logic.
+///
+/// Returns `None` when no explicit path is configured — the caller falls
+/// through to its normal download path. Otherwise the answer never touches
+/// the network: the file's path and byte size when it exists, or a
+/// user-actionable error when it doesn't.
+fn check_explicit_model(config: &ChatConfig) -> Option<Result<(PathBuf, u64)>> {
+    let explicit = config.explicit_model_path.as_ref()?;
+    match std::fs::metadata(explicit) {
+        Ok(meta) if meta.is_file() => Some(Ok((explicit.clone(), meta.len()))),
+        _ => Some(Err(TomeError::Other(format!(
+            "chat model not found at {} — check the path in Settings → Ask Tome, \
+             or clear it to use the downloader",
+            explicit.display()
+        )))),
+    }
 }
 
 #[cfg(feature = "chat")]
@@ -73,6 +99,15 @@ mod chat_impl {
     where
         F: FnMut(u64) + Send + 'static,
     {
+        // A side-loaded model wins outright: no network, no hf-hub API
+        // construction. One progress tick with the real size so the UI's
+        // byte counter lands on the truth immediately.
+        if let Some(resolved) = check_explicit_model(config) {
+            let (path, size) = resolved?;
+            on_progress(size);
+            return Ok(path);
+        }
+
         std::fs::create_dir_all(&config.cache_dir)
             .map_err(|e| TomeError::Other(format!("create chat cache dir: {e}")))?;
 
@@ -123,8 +158,14 @@ mod chat_impl {
         let _ = cancel_tx.send(());
         let _ = progress_handle.await;
 
-        let path = download_result
-            .map_err(|e| TomeError::Other(format!("download {}: {e}", config.model_file)))?;
+        let path = download_result.map_err(|e| {
+            TomeError::Other(format!(
+                "download {}: {e} — if this machine is offline, download {} from \
+                 huggingface.co/{} on a connected machine, copy it to this machine, \
+                 and set its path in Settings → Ask Tome (see docs/OFFLINE-SURVIVAL-KIT.md)",
+                config.model_file, config.model_file, config.model_repo
+            ))
+        })?;
 
         // Move the cached file to the deterministic path we promised
         // callers via `expected_path`. hf-hub returns its own internal
@@ -188,10 +229,20 @@ mod stub_impl {
     /// Stub when the `chat` feature is disabled. Returns a clear error so
     /// the UI can render a "Chat not built" state instead of failing
     /// mysteriously deep inside an HTTP call.
-    pub async fn download_chat_model<F>(_config: &ChatConfig, _on_progress: F) -> Result<PathBuf>
+    ///
+    /// A user-supplied `explicit_model_path` is still honored: serving a
+    /// file that's already on disk needs no download machinery, so an
+    /// offline user on a stock build with a side-loaded model gets a
+    /// working path instead of "rebuild with --features chat".
+    pub async fn download_chat_model<F>(config: &ChatConfig, mut on_progress: F) -> Result<PathBuf>
     where
         F: FnMut(u64) + Send + 'static,
     {
+        if let Some(resolved) = check_explicit_model(config) {
+            let (path, size) = resolved?;
+            on_progress(size);
+            return Ok(path);
+        }
         Err(TomeError::Other(
             "chat disabled: rebuild with --features chat to enable model download".into(),
         ))
@@ -224,5 +275,94 @@ mod tests {
         };
         assert!(!is_present(&cfg));
         assert!(chat_model_path(&cfg).is_none());
+    }
+
+    fn explicit_cfg(path: PathBuf) -> ChatConfig {
+        ChatConfig {
+            explicit_model_path: Some(path),
+            ..ChatConfig::default()
+        }
+    }
+
+    #[test]
+    fn explicit_path_overrides_cache_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("side-loaded.gguf");
+        std::fs::write(&model, b"fake gguf bytes").unwrap();
+
+        let cfg = explicit_cfg(model.clone());
+        assert_eq!(expected_path(&cfg), model);
+        assert!(is_present(&cfg));
+        assert_eq!(chat_model_path(&cfg), Some(model));
+    }
+
+    #[test]
+    fn explicit_path_missing_file_reports_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.gguf");
+
+        let cfg = explicit_cfg(missing.clone());
+        assert_eq!(expected_path(&cfg), missing);
+        assert!(!is_present(&cfg));
+        assert!(chat_model_path(&cfg).is_none());
+    }
+
+    /// Runs against whichever `download_chat_model` is compiled in: both
+    /// the stub and the real implementation must honor an existing
+    /// explicit file before any feature gate or network logic.
+    #[tokio::test]
+    async fn download_returns_explicit_file_with_one_size_progress_tick() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("side-loaded.gguf");
+        std::fs::write(&model, b"0123456789").unwrap(); // 10 bytes
+
+        let cfg = explicit_cfg(model.clone());
+        let ticks: std::sync::Arc<std::sync::Mutex<Vec<u64>>> = Default::default();
+        let sink = ticks.clone();
+        let path = download_chat_model(&cfg, move |bytes| {
+            sink.lock().unwrap().push(bytes);
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(path, model);
+        assert_eq!(
+            *ticks.lock().unwrap(),
+            vec![10],
+            "exactly one progress tick with the file's byte size"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_errors_clearly_for_missing_explicit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("usb-was-unplugged.gguf");
+
+        let cfg = explicit_cfg(missing.clone());
+        let err = download_chat_model(&cfg, |_| {}).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("chat model not found at"), "got: {msg}");
+        assert!(
+            msg.contains(&missing.display().to_string()),
+            "error must name the configured path; got: {msg}"
+        );
+        assert!(msg.contains("Settings"), "got: {msg}");
+        assert!(
+            msg.contains("clear it to use the downloader"),
+            "got: {msg}"
+        );
+    }
+
+    /// Without an explicit path the stub's behavior is unchanged: a clear
+    /// feature-disabled error, no filesystem probing of the cache layout.
+    #[cfg(not(feature = "chat"))]
+    #[tokio::test]
+    async fn stub_download_without_explicit_path_reports_feature_disabled() {
+        let cfg = ChatConfig {
+            cache_dir: std::path::Path::new("/this/path/does/not/exist").to_path_buf(),
+            ..ChatConfig::default()
+        };
+        let err = download_chat_model(&cfg, |_| {}).await.unwrap_err();
+        assert!(err.to_string().contains("--features chat"));
     }
 }

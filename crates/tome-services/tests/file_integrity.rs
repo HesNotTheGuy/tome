@@ -23,6 +23,14 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+/// A cancel flag that is never tripped — these integrity tests run each
+/// ingest to completion. (The ingesters now take a cooperative cancel token;
+/// passing a never-set flag preserves the original test behavior.)
+fn never() -> AtomicBool {
+    AtomicBool::new(false)
+}
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -89,7 +97,7 @@ fn geotag_ingest_does_not_mutate_source_file() {
 
     let mut count = 0_u64;
     assert_unchanged_after(f.path(), || {
-        let n = geotag_ingest::parse_file(f.path(), |_| count += 1).expect("parse");
+        let n = geotag_ingest::parse_file(f.path(), &never(), |_| count += 1).expect("parse");
         assert!(n > 0, "fixture should yield at least one row");
     });
 }
@@ -101,7 +109,7 @@ fn categorylinks_ingest_does_not_mutate_source_file() {
     let f = write_gz(sql);
 
     assert_unchanged_after(f.path(), || {
-        let _ = category_ingest::parse_file(f.path(), |_| {});
+        let _ = category_ingest::parse_file(f.path(), &never(), |_| {});
     });
 }
 
@@ -113,7 +121,7 @@ fn redirect_ingest_does_not_mutate_source_file() {
 
     let mut count = 0_u64;
     assert_unchanged_after(f.path(), || {
-        let n = redirect_ingest::parse_file(f.path(), |_| count += 1).expect("parse");
+        let n = redirect_ingest::parse_file(f.path(), &never(), |_| count += 1).expect("parse");
         assert!(n > 0);
     });
 }
@@ -126,7 +134,7 @@ fn geotag_ingest_errors_when_file_is_truncated() {
     fs::write(f.path(), b"this is not a gzip stream").unwrap();
 
     assert_unchanged_after(f.path(), || {
-        let result = geotag_ingest::parse_file(f.path(), |_| {});
+        let result = geotag_ingest::parse_file(f.path(), &never(), |_| {});
         assert!(result.is_err(), "garbage input must produce an error");
     });
 }
@@ -137,7 +145,7 @@ fn redirect_ingest_errors_when_file_is_truncated() {
     fs::write(f.path(), b"\x1f\x8b\x08\x00truncated mid-stream").unwrap();
 
     assert_unchanged_after(f.path(), || {
-        let result = redirect_ingest::parse_file(f.path(), |_| {});
+        let result = redirect_ingest::parse_file(f.path(), &never(), |_| {});
         assert!(result.is_err(), "truncated gzip must produce an error");
     });
 }

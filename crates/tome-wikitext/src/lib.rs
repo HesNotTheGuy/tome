@@ -11,8 +11,11 @@
 //! 2. **Local Rust render** (offline fallback): walk the
 //!    [`parse_wiki_text_2`] AST and emit HTML for the structural elements
 //!    (paragraphs, headings, lists, internal/external links, plain text).
-//!    Templates render as styled placeholders; references are collected into
-//!    a footnote list. Output is intentionally lower fidelity but readable.
+//!    Headings carry stable `s-{slug}` anchor ids for the Reader's table of
+//!    contents. Common template families (infoboxes, citations, convert,
+//!    lang/IPA) render as readable approximations; everything else renders
+//!    as a styled placeholder. References are collected into a footnote
+//!    list. Output is intentionally lower fidelity but readable.
 //!
 //! Internal links are resolved against an injected [`LinkResolver`] so the
 //! renderer is decoupled from storage and reusable in tests with mock

@@ -128,6 +128,15 @@ export interface TomeService {
   relatedToTitle(title: string, limit: number): Promise<RelatedArticle[]>;
   recommendationsEnabled(): Promise<boolean>;
   setRecommendationsEnabled(enabled: boolean): Promise<void>;
+  cancelIngest(): Promise<void>;
+  offlineMode(): Promise<boolean>;
+  setOfflineMode(enabled: boolean): Promise<void>;
+  chatModelPath(): Promise<string | null>;
+  setChatModelPath(path: string | null): Promise<void>;
+  titleSuggestions(prefix: string, limit: number): Promise<string[]>;
+  searchDocCount(): Promise<number>;
+  countPrimaryGeotags(): Promise<number>;
+  primaryGeotagsPage(limit: number, offset: number): Promise<MappedGeotag[]>;
   healthCheck(): Promise<string>;
 }
 
@@ -369,6 +378,33 @@ export const tome: TomeService = {
   },
   setRecommendationsEnabled(enabled) {
     return invoke<void>("set_recommendations_enabled", { enabled });
+  },
+  cancelIngest() {
+    return invoke<void>("cancel_ingest");
+  },
+  offlineMode() {
+    return invoke<boolean>("offline_mode");
+  },
+  setOfflineMode(enabled) {
+    return invoke<void>("set_offline_mode", { enabled });
+  },
+  chatModelPath() {
+    return invoke<string | null>("chat_model_path");
+  },
+  setChatModelPath(path) {
+    return invoke<void>("set_chat_model_path", { path });
+  },
+  titleSuggestions(prefix, limit) {
+    return invoke<string[]>("title_suggestions", { prefix, limit });
+  },
+  searchDocCount() {
+    return invoke<number>("search_doc_count");
+  },
+  countPrimaryGeotags() {
+    return invoke<number>("count_primary_geotags");
+  },
+  primaryGeotagsPage(limit, offset) {
+    return invoke<MappedGeotag[]>("primary_geotags_page", { limit, offset });
   },
   async ingestIndex(path, onProgress) {
     const eventMod = await import("@tauri-apps/api/event");

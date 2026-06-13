@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import PathField from "./PathField";
 import { tome } from "../service";
 import { isTauri } from "../types";
 
@@ -192,6 +193,12 @@ function DownloadStep({
         pause/resume. Tome will read whatever you end up with.
       </div>
 
+      <div className="rounded border border-tome-border bg-tome-surface-2 p-3 text-xs text-tome-muted">
+        <div className="font-semibold text-tome-text mb-1">No internet on this machine?</div>
+        Download the files on a connected machine and copy them over — the
+        paths in the next step accept files straight from a USB drive.
+      </div>
+
       <div className="flex justify-between pt-2">
         <button
           type="button"
@@ -307,24 +314,24 @@ function ConfigureStep({
           <label className="block text-xs font-semibold uppercase tracking-wide text-tome-muted mb-1">
             Dump file (*.xml.bz2)
           </label>
-          <input
-            type="text"
+          <PathField
             value={dumpPath}
-            onChange={(e) => setDumpPath(e.target.value)}
+            onChange={setDumpPath}
+            mode="openFile"
+            filters={[{ name: "bzip2 dump", extensions: ["bz2"] }]}
             placeholder="C:\path\to\simplewiki-latest-pages-articles-multistream.xml.bz2"
-            className="w-full px-3 py-2 text-xs font-mono rounded border border-tome-border bg-tome-bg"
           />
         </div>
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wide text-tome-muted mb-1">
             Index file (*-index.txt.bz2)
           </label>
-          <input
-            type="text"
+          <PathField
             value={indexPath}
-            onChange={(e) => setIndexPath(e.target.value)}
+            onChange={setIndexPath}
+            mode="openFile"
+            filters={[{ name: "bzip2 index", extensions: ["bz2"] }]}
             placeholder="C:\path\to\simplewiki-latest-pages-articles-multistream-index.txt.bz2"
-            className="w-full px-3 py-2 text-xs font-mono rounded border border-tome-border bg-tome-bg"
           />
         </div>
       </div>
@@ -391,21 +398,75 @@ function DoneStep({
   summary: { count: number; ms: number };
   onFinish: () => void;
 }) {
+  const nextSteps: { label: string; unlocks: string; duration: string }[] = [
+    {
+      label: "Categorylinks",
+      unlocks: "Browse pane + related articles",
+      duration: "~30+ min on full enwiki",
+    },
+    {
+      label: "Geotags",
+      unlocks: "map pins + coordinates",
+      duration: "a few minutes",
+    },
+    {
+      label: "Redirects",
+      unlocks: "“USA” opens “United States”",
+      duration: "a few minutes",
+    },
+    {
+      label: "Offline map (.pmtiles)",
+      unlocks: "map basemap",
+      duration: "",
+    },
+    {
+      label: "Ask Tome (AI chat)",
+      unlocks: "download or side-load a model in Settings",
+      duration: "",
+    },
+  ];
+
   return (
-    <div className="space-y-4 text-center py-4">
-      <div className="text-4xl">✓</div>
-      <div className="text-lg font-semibold">
-        {summary.count.toLocaleString()} articles indexed
+    <div className="space-y-4 py-2">
+      <div className="text-center space-y-1">
+        <div className="text-4xl">✓</div>
+        <div className="text-lg font-semibold">
+          You&apos;re set up — {summary.count.toLocaleString()} articles indexed
+        </div>
+        <div className="text-xs text-tome-muted">
+          in {(summary.ms / 1000).toFixed(1)}s · ready to search
+        </div>
       </div>
-      <div className="text-xs text-tome-muted">
-        in {(summary.ms / 1000).toFixed(1)}s · ready to search
+
+      <div className="space-y-2">
+        <div className="text-sm font-semibold text-tome-text">
+          Optional next steps
+        </div>
+        <ul className="space-y-1.5">
+          {nextSteps.map((s) => (
+            <li
+              key={s.label}
+              className="flex items-baseline gap-2 text-sm text-tome-muted"
+            >
+              <span className="text-tome-muted">→</span>
+              <span className="flex-1">
+                <span className="font-medium text-tome-text">{s.label}</span>{" "}
+                {s.unlocks}
+                {s.duration && (
+                  <span className="text-tome-muted"> · {s.duration}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-tome-muted pt-1">
+          All of this lives in Settings whenever you&apos;re ready. Tip: turn on{" "}
+          <strong className="text-tome-text">Settings → Offline mode</strong>{" "}
+          before disconnecting.
+        </p>
       </div>
-      <div className="text-sm text-tome-text pt-2">
-        You can now search any article from the bar at the top, or browse by
-        category. Optional next steps live in Settings: ingest the
-        categorylinks, geotag, or redirect tables for richer features.
-      </div>
-      <div className="pt-2">
+
+      <div className="flex justify-end pt-1">
         <button
           type="button"
           onClick={onFinish}

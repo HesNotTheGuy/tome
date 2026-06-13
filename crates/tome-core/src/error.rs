@@ -25,6 +25,12 @@ pub enum TomeError {
     #[error("config error: {0}")]
     Config(String),
 
+    /// A long-running operation (ingest, embedding) was cancelled by the
+    /// user. Distinct from a real failure so callers can attach a friendly
+    /// "partial progress kept" message instead of an error tone.
+    #[error("cancelled")]
+    Cancelled,
+
     #[error("circuit breaker open: try again later")]
     CircuitBreakerOpen,
 

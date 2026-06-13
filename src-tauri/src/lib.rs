@@ -42,12 +42,17 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol(
             pmtiles_protocol::SCHEME,
             pmtiles_protocol::handle,
         )
         .setup(|app| {
             let tome = build_tome(app)?;
+            // Re-engage the kill switch if the user left this machine in
+            // offline mode last session — an offline machine stays offline
+            // without a re-toggle.
+            tome.apply_offline_mode_on_startup();
             app.manage(Arc::new(tome));
             build_main_window(app)?;
             Ok(())
@@ -89,6 +94,8 @@ pub fn run() {
             count_geotags,
             geotag_for_title,
             all_primary_geotags,
+            count_primary_geotags,
+            primary_geotags_page,
             ingest_categorylinks,
             category_members,
             categories_for_title,
@@ -113,6 +120,13 @@ pub fn run() {
             check_disk_space_for_chat_model,
             download_chat_model,
             ask_tome,
+            cancel_ingest,
+            offline_mode,
+            set_offline_mode,
+            chat_model_path,
+            set_chat_model_path,
+            title_suggestions,
+            search_doc_count,
             health_check,
         ])
         .run(tauri::generate_context!())
@@ -608,6 +622,24 @@ async fn all_primary_geotags(state: State<'_, Arc<Tome>>) -> Result<Vec<MappedGe
 }
 
 #[tauri::command]
+fn count_primary_geotags(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.count_primary_geotags().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn primary_geotags_page(
+    limit: u32,
+    offset: u64,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<MappedGeotag>, String> {
+    let tome = state.inner().clone();
+    tokio::task::spawn_blocking(move || tome.primary_geotags_page(limit, offset))
+        .await
+        .map_err(|e| format!("primary_geotags_page task join: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn ingest_categorylinks(
     path: String,
     app: AppHandle,
@@ -698,6 +730,54 @@ fn related_to_title(
 #[tauri::command]
 fn recommendations_enabled(state: State<'_, Arc<Tome>>) -> bool {
     state.recommendations_enabled()
+}
+
+/// Signal any in-flight ingest to stop at its next checkpoint. Cheap and
+/// safe to call when nothing is running.
+#[tauri::command]
+fn cancel_ingest(state: State<'_, Arc<Tome>>) {
+    state.cancel_ingest();
+}
+
+#[tauri::command]
+fn offline_mode(state: State<'_, Arc<Tome>>) -> bool {
+    state.offline_mode()
+}
+
+#[tauri::command]
+fn set_offline_mode(enabled: bool, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    state.set_offline_mode(enabled).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn chat_model_path(state: State<'_, Arc<Tome>>) -> Option<String> {
+    state
+        .chat_model_path()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn set_chat_model_path(path: Option<String>, state: State<'_, Arc<Tome>>) -> Result<(), String> {
+    let pb = path.map(PathBuf::from);
+    state.set_chat_model_path(pb).map_err(|e| e.to_string())
+}
+
+/// Title-prefix suggestions for search-as-you-type. Synchronous: it's an
+/// indexed SQLite lookup that returns in well under a millisecond.
+#[tauri::command]
+fn title_suggestions(
+    prefix: String,
+    limit: u32,
+    state: State<'_, Arc<Tome>>,
+) -> Result<Vec<String>, String> {
+    state
+        .title_suggestions(&prefix, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn search_doc_count(state: State<'_, Arc<Tome>>) -> Result<u64, String> {
+    state.search_doc_count().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

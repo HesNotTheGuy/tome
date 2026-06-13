@@ -30,7 +30,7 @@ export default function Archive({ onOpen }: ArchiveProps) {
   return (
     <section className="px-6 py-6 max-w-4xl mx-auto">
       <h2 className="text-2xl font-bold mb-1">Archive</h2>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+      <p className="text-sm text-tome-muted mb-4">
         Permanently saved revisions. Searchable across notes, titles, and
         full content. Survives dump replacement.
       </p>
@@ -40,48 +40,48 @@ export default function Archive({ onOpen }: ArchiveProps) {
         placeholder="Search saved revisions…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        className="w-full px-3 py-2 mb-4 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="w-full px-3 py-2 mb-4 rounded border border-tome-border bg-tome-surface text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
 
       {!isTauri() && (
-        <div className="p-4 mb-4 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 text-sm">
+        <div className="p-4 mb-4 rounded border border-tome-border bg-tome-surface-2 text-sm">
           Running outside the Tauri shell — backend not connected.
         </div>
       )}
 
       {error && (
-        <div className="p-4 mb-4 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 text-sm text-red-700 dark:text-red-300">
+        <div className="p-3 mb-4 rounded border border-tome-danger/50 bg-tome-danger/10 text-sm text-tome-danger">
           {error}
         </div>
       )}
 
       {loaded && items.length === 0 && !error && (
-        <div className="p-6 rounded border border-dashed border-zinc-300 dark:border-zinc-700 text-center text-sm text-zinc-500 dark:text-zinc-400">
+        <div className="p-6 rounded border border-dashed border-tome-border text-center text-sm text-tome-muted">
           {query.trim().length > 0
             ? "No saved revisions match that query."
             : "No saved revisions yet. Save one from the Reader's timeline."}
         </div>
       )}
 
-      <ul className="divide-y divide-zinc-200 dark:divide-zinc-800 rounded border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+      <ul className="divide-y divide-tome-border rounded border border-tome-border overflow-hidden">
         {items.map((rev) => (
           <li
             key={rev.id}
-            className="p-3 hover:bg-zinc-50 dark:hover:bg-zinc-900 cursor-pointer"
+            className="p-3 hover:bg-tome-surface-2 cursor-pointer"
             onClick={() => onOpen(rev.title)}
           >
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-medium text-sm">{rev.title}</h3>
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              <h3 className="font-medium text-sm text-tome-text">{rev.title}</h3>
+              <span className="text-xs text-tome-muted">
                 rev {rev.revision_id}
               </span>
             </div>
             {rev.user_note && (
-              <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2">
+              <p className="text-xs text-tome-muted mt-1 line-clamp-2">
                 {rev.user_note}
               </p>
             )}
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-1">
+            <p className="text-[11px] text-tome-muted mt-1">
               saved {formatDate(rev.fetched_at)}
             </p>
           </li>

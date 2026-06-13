@@ -38,7 +38,8 @@ pub trait ArticleStore: Send + Sync {
     /// Up to `n` non-pinned Hot/Warm article ids ordered by least-recently
     /// accessed first. Used by the demotion policy in higher layers.
     fn lru_candidates(&self, n: u32) -> Result<Vec<u64>>;
-    /// A uniformly-random article title from any non-evicted tier.
+    /// An approximately-uniform random article title from any non-evicted
+    /// tier (see the SQLite impl for the exact bias trade-off).
     /// Returns `None` if storage is empty. Powers the "Random article"
     /// button in the header — gives users a way to discover content
     /// without making any editorial choices on our part.
@@ -51,6 +52,10 @@ pub trait ArticleStore: Send + Sync {
     /// articles. Used by the History pane's "Clear history" button.
     /// Returns the number of rows touched (i.e., previously had access > 0).
     fn clear_history(&self) -> Result<u64>;
+    /// Article titles starting with `prefix`, case-insensitively. Powers
+    /// search-as-you-type suggestions. Excludes evicted articles. Shorter
+    /// titles first (the most likely completion), then alphabetical.
+    fn titles_with_prefix(&self, prefix: &str, limit: u32) -> Result<Vec<String>>;
 
     // --- Bookmarks ---
 
@@ -123,6 +128,13 @@ pub trait ArticleStore: Send + Sync {
     /// title. Powers the Map pane. Returned in arbitrary order; callers that
     /// care should sort.
     fn all_primary_geotags(&self) -> Result<Vec<MappedGeotag>>;
+    /// Number of primary geotags joined with an indexed article. The Map
+    /// pane uses this with `primary_geotags_page` to stream pins in pages
+    /// instead of one giant payload.
+    fn count_primary_geotags(&self) -> Result<u64>;
+    /// One page of primary geotags, ordered by page_id so pagination is
+    /// stable across calls. Same join as `all_primary_geotags`.
+    fn primary_geotags_page(&self, limit: u32, offset: u64) -> Result<Vec<MappedGeotag>>;
 
     // --- Category links ---
 
@@ -235,9 +247,38 @@ impl SqliteArticleStore {
         Self::init(conn)
     }
 
+    /// Apply connection-level settings, run migrations, and wrap the
+    /// connection.
+    ///
+    /// Pragma choices, and why:
+    /// - `journal_mode=WAL`: readers don't block while dump ingestion is
+    ///   mid-write, so the UI stays responsive during a multi-minute ingest.
+    ///   (On in-memory databases this pragma is a no-op that reports
+    ///   "memory" — harmless, which is why we set it via `pragma_update`
+    ///   rather than `execute`: pragmas that return a row would otherwise
+    ///   error.)
+    /// - `synchronous=NORMAL`: under WAL this only risks losing the very
+    ///   last transactions on power loss, never corruption — the right
+    ///   trade for a cache that can be re-ingested from the dump.
+    /// - `cache_size=-65536`: 64 MB page cache. Ingest touches millions of
+    ///   B-tree pages; the SQLite default (~2 MB) thrashes.
+    /// - `temp_store=MEMORY`: sort/temp B-trees (ORDER BY, GROUP BY over
+    ///   categorylinks) stay off the disk.
+    /// - `mmap_size=268435456`: memory-map up to 256 MB of the main DB so
+    ///   hot read paths skip the read() syscall + page-cache copy.
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(|e| TomeError::Storage(format!("enable foreign keys: {e}")))?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| TomeError::Storage(format!("set journal_mode: {e}")))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| TomeError::Storage(format!("set synchronous: {e}")))?;
+        conn.pragma_update(None, "cache_size", -65536_i64)
+            .map_err(|e| TomeError::Storage(format!("set cache_size: {e}")))?;
+        conn.pragma_update(None, "temp_store", "MEMORY")
+            .map_err(|e| TomeError::Storage(format!("set temp_store: {e}")))?;
+        conn.pragma_update(None, "mmap_size", 268_435_456_i64)
+            .map_err(|e| TomeError::Storage(format!("set mmap_size: {e}")))?;
         schema::migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -661,6 +702,59 @@ impl ArticleStore for SqliteArticleStore {
         Ok(out)
     }
 
+    fn count_primary_geotags(&self) -> Result<u64> {
+        let conn = self.lock()?;
+        // Same JOIN as primary_geotags_page so the count and the pages can
+        // never disagree about which rows exist (a geotag whose article was
+        // never indexed is invisible to both).
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM geotags g
+                 JOIN articles a ON a.page_id = g.page_id
+                 WHERE g.primary_ = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| TomeError::Storage(format!("count primary geotags: {e}")))?;
+        Ok(n as u64)
+    }
+
+    fn primary_geotags_page(&self, limit: u32, offset: u64) -> Result<Vec<MappedGeotag>> {
+        let conn = self.lock()?;
+        // ORDER BY g.page_id gives a deterministic total order, so
+        // consecutive (limit, offset) windows tile the result set without
+        // gaps or overlap. The clamp guards against a zero limit (infinite
+        // loop upstream) and a pathological one (giant allocation).
+        let limit = limit.clamp(1, 100_000) as i64;
+        let mut stmt = conn
+            .prepare(
+                "SELECT g.page_id, a.title, g.lat, g.lon, g.kind
+                 FROM geotags g
+                 JOIN articles a ON a.page_id = g.page_id
+                 WHERE g.primary_ = 1
+                 ORDER BY g.page_id
+                 LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare primary_geotags_page: {e}")))?;
+        let rows = stmt
+            .query_map(params![limit, offset as i64], |row| {
+                Ok(MappedGeotag {
+                    page_id: row.get::<_, i64>(0)? as u64,
+                    title: row.get(1)?,
+                    lat: row.get(2)?,
+                    lon: row.get(3)?,
+                    kind: row.get(4)?,
+                })
+            })
+            .map_err(|e| TomeError::Storage(format!("query primary_geotags_page: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row primary_geotags_page: {e}")))?);
+        }
+        Ok(out)
+    }
+
     fn batch_upsert_categorylinks(&self, entries: &[crate::category::CategoryLink]) -> Result<u64> {
         if entries.is_empty() {
             return Ok(0);
@@ -938,21 +1032,45 @@ impl ArticleStore for SqliteArticleStore {
 
     fn random_article_title(&self) -> Result<Option<String>> {
         let conn = self.lock()?;
-        // ORDER BY RANDOM() does a full table scan but the LIMIT 1 keeps
-        // memory bounded and the corpus tops out at ~6.8 M rows for
-        // enwiki — well under a second on any modern disk. For an
-        // interactive button click that's plenty.
+        // Probe a random point in the page_id key space and take the first
+        // non-evicted row at or after it. That's two B-tree descents
+        // (O(log n)) instead of the full-table sort ORDER BY RANDOM()
+        // performs — which materialized and sorted all ~6.8 M enwiki rows on
+        // every click. The honest trade-off: the row immediately after a
+        // page_id gap is more likely to be picked (its "catchment area" is
+        // the whole gap), so the distribution is only approximately uniform.
+        // For a "surprise me" button that bias is invisible; for sampling
+        // statistics it would not be.
+        //
         // Excluding 'evicted' so a user who deliberately marked an
         // article as off-limits doesn't get bounced into it.
+        let probed = conn
+            .query_row(
+                "SELECT title FROM articles
+                 WHERE tier IN ('hot','warm','cold')
+                   AND page_id >= (SELECT MIN(page_id) + ABS(RANDOM()) % (MAX(page_id) - MIN(page_id) + 1) FROM articles)
+                 ORDER BY page_id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| TomeError::Storage(format!("random_article_title probe: {e}")))?;
+        if probed.is_some() {
+            return Ok(probed);
+        }
+        // Wrap around: the probe ranges over MIN/MAX of ALL rows (evicted
+        // included), so it can land past the last non-evicted page_id — take
+        // the lowest non-evicted row instead. On an empty or all-evicted
+        // table this also finds nothing, and we correctly return None.
         conn.query_row(
             "SELECT title FROM articles
              WHERE tier IN ('hot','warm','cold')
-             ORDER BY RANDOM() LIMIT 1",
+             ORDER BY page_id LIMIT 1",
             [],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|e| TomeError::Storage(format!("random_article_title: {e}")))
+        .map_err(|e| TomeError::Storage(format!("random_article_title fallback: {e}")))
     }
 
     fn recent_articles(&self, limit: u32) -> Result<Vec<HistoryEntry>> {
@@ -996,6 +1114,49 @@ impl ArticleStore for SqliteArticleStore {
             )
             .map_err(|e| TomeError::Storage(format!("clear_history: {e}")))?;
         Ok(n as u64)
+    }
+
+    fn titles_with_prefix(&self, prefix: &str, limit: u32) -> Result<Vec<String>> {
+        // An empty prefix would match every title — meaningless as a
+        // suggestion and a pointless scan, so short-circuit.
+        if prefix.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.lock()?;
+        // Escape the LIKE meta-characters (% _ \) so a user typing "100%"
+        // doesn't match every title and "_lan" doesn't gobble a leading
+        // char — same treatment as search_categories. SQLite's LIKE is
+        // case-insensitive for ASCII, and the NOCASE index from migration 7
+        // turns the prefix match into an indexed range scan.
+        let mut escaped = String::with_capacity(prefix.len() + 4);
+        for c in prefix.chars() {
+            match c {
+                '\\' | '%' | '_' => {
+                    escaped.push('\\');
+                    escaped.push(c);
+                }
+                _ => escaped.push(c),
+            }
+        }
+        escaped.push('%');
+        let mut stmt = conn
+            .prepare(
+                "SELECT title FROM articles
+                 WHERE title LIKE ?1 ESCAPE '\\' AND tier != 'evicted'
+                 ORDER BY length(title), title
+                 LIMIT ?2",
+            )
+            .map_err(|e| TomeError::Storage(format!("prepare titles_with_prefix: {e}")))?;
+        let rows = stmt
+            .query_map(params![escaped, limit.clamp(1, 50) as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| TomeError::Storage(format!("query titles_with_prefix: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| TomeError::Storage(format!("row titles_with_prefix: {e}")))?);
+        }
+        Ok(out)
     }
 
     fn add_bookmark(
@@ -2168,5 +2329,175 @@ mod tests {
             .unwrap();
         assert_eq!(out.bookmarks_added, 1);
         assert_eq!(store.bookmarks_in_folder(None, 100).unwrap().len(), 1);
+    }
+
+    // --- titles_with_prefix tests -------------------------------------------
+
+    #[test]
+    fn titles_with_prefix_is_case_insensitive_and_shortest_first() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .upsert_metadata(&cold_meta(1, "United States", 100))
+            .unwrap();
+        store
+            .upsert_metadata(&cold_meta(2, "United Kingdom", 200))
+            .unwrap();
+        store.upsert_metadata(&cold_meta(3, "United", 300)).unwrap();
+        store.upsert_metadata(&cold_meta(4, "Uruguay", 400)).unwrap();
+        // Lower-case query must still match the title-case rows, and the
+        // shortest title (the most likely completion) must come first.
+        let titles = store.titles_with_prefix("united", 10).unwrap();
+        assert_eq!(titles, vec!["United", "United States", "United Kingdom"]);
+        // Limit is honored.
+        let titles = store.titles_with_prefix("united", 2).unwrap();
+        assert_eq!(titles, vec!["United", "United States"]);
+    }
+
+    #[test]
+    fn titles_with_prefix_escapes_like_metacharacters() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .upsert_metadata(&cold_meta(1, "100% Orange Juice", 100))
+            .unwrap();
+        store
+            .upsert_metadata(&cold_meta(2, "1000 Genomes Project", 200))
+            .unwrap();
+        // Without escaping, '%' in the prefix would wildcard-match the
+        // "1000 Genomes Project" row too.
+        let titles = store.titles_with_prefix("100%", 10).unwrap();
+        assert_eq!(titles, vec!["100% Orange Juice"]);
+    }
+
+    #[test]
+    fn titles_with_prefix_empty_prefix_returns_empty() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "Photon", 100)).unwrap();
+        assert!(store.titles_with_prefix("", 10).unwrap().is_empty());
+        assert!(store.titles_with_prefix("   ", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn titles_with_prefix_excludes_evicted() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store.upsert_metadata(&cold_meta(1, "Volcano", 100)).unwrap();
+        store
+            .upsert_metadata(&meta(2, "Voltage", Tier::Evicted))
+            .unwrap();
+        let titles = store.titles_with_prefix("Vol", 10).unwrap();
+        assert_eq!(titles, vec!["Volcano"]);
+    }
+
+    // --- Geotag paging tests ------------------------------------------------
+
+    #[test]
+    fn geotag_pages_are_disjoint_ordered_and_tile_the_full_set() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        seed_articles(&store, 7);
+        let mut tags: Vec<crate::geotag::Geotag> = (1..=7u64)
+            .map(|i| crate::geotag::Geotag {
+                page_id: i,
+                lat: i as f64,
+                lon: -(i as f64),
+                primary: true,
+                kind: Some("city".into()),
+            })
+            .collect();
+        // Noise the join/filter must exclude: a non-primary tag on an
+        // indexed article, and a primary tag whose article was never indexed.
+        tags.push(crate::geotag::Geotag {
+            page_id: 1,
+            lat: 50.0,
+            lon: 50.0,
+            primary: false,
+            kind: None,
+        });
+        tags.push(crate::geotag::Geotag {
+            page_id: 99,
+            lat: 60.0,
+            lon: 60.0,
+            primary: true,
+            kind: None,
+        });
+        store.batch_upsert_geotags(&tags).unwrap();
+
+        assert_eq!(store.count_primary_geotags().unwrap(), 7);
+
+        // Page through with a window smaller than the set: 3 + 3 + 1.
+        let mut paged: Vec<MappedGeotag> = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let page = store.primary_geotags_page(3, offset).unwrap();
+            if page.is_empty() {
+                break;
+            }
+            // Each page is internally ordered and strictly after the
+            // previous page — i.e. pages are disjoint.
+            let ids: Vec<u64> = page.iter().map(|g| g.page_id).collect();
+            let mut sorted = ids.clone();
+            sorted.sort_unstable();
+            assert_eq!(ids, sorted, "page not ordered by page_id");
+            if let (Some(prev), Some(first)) = (paged.last(), page.first()) {
+                assert!(prev.page_id < first.page_id, "pages overlap");
+            }
+            offset += page.len() as u64;
+            paged.extend(page);
+        }
+
+        // The union of all pages equals the unpaged query and the count.
+        assert_eq!(paged.len() as u64, store.count_primary_geotags().unwrap());
+        let mut all = store.all_primary_geotags().unwrap();
+        all.sort_by_key(|g| g.page_id);
+        assert_eq!(paged, all);
+    }
+
+    // --- random_article_title tests ------------------------------------------
+
+    #[test]
+    fn random_article_title_always_yields_valid_non_evicted_title() {
+        use std::collections::HashSet;
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        // Non-contiguous page_ids exercise the gap bias path, and an evicted
+        // row holding the highest page_id forces probes that land past every
+        // non-evicted row through the wrap-around fallback.
+        let ids = [5u64, 17, 23, 99, 1000];
+        for &id in &ids {
+            store
+                .upsert_metadata(&cold_meta(id, &format!("A{id}"), id))
+                .unwrap();
+        }
+        store
+            .upsert_metadata(&meta(5000, "Off limits", Tier::Evicted))
+            .unwrap();
+        let valid: HashSet<String> = ids.iter().map(|id| format!("A{id}")).collect();
+        for _ in 0..20 {
+            let t = store
+                .random_article_title()
+                .unwrap()
+                .expect("populated table must yield a title");
+            assert!(valid.contains(&t), "unexpected or evicted title: {t}");
+        }
+    }
+
+    #[test]
+    fn random_article_title_empty_table_returns_none() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        assert!(store.random_article_title().unwrap().is_none());
+    }
+
+    #[test]
+    fn random_article_title_all_evicted_returns_none() {
+        let store = SqliteArticleStore::open_in_memory().unwrap();
+        store
+            .upsert_metadata(&meta(1, "Gone", Tier::Evicted))
+            .unwrap();
+        store
+            .upsert_metadata(&meta(2, "Also gone", Tier::Evicted))
+            .unwrap();
+        // The probe subquery's MIN/MAX ranges over ALL rows (evicted
+        // included), so the probe itself can "hit" — only the tier filter +
+        // fallback guarantee None here. Loop to cover both probe outcomes.
+        for _ in 0..20 {
+            assert!(store.random_article_title().unwrap().is_none());
+        }
     }
 }

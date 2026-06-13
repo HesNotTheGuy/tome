@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { useConfirm } from "../components/Dialog";
 import { tome } from "../service";
 import { relativeTime } from "../time";
 import { HistoryEntry, isTauri } from "../types";
@@ -18,6 +19,7 @@ interface HistoryProps {
  * forward but doesn't retroactively wipe.
  */
 export default function History({ onOpen }: HistoryProps) {
+  const confirm = useConfirm();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [enabled, setEnabled] = useState<boolean>(true);
   const [loading, setLoading] = useState(true);
@@ -45,7 +47,14 @@ export default function History({ onOpen }: HistoryProps) {
   }, []);
 
   async function handleClear() {
-    if (!confirm("Clear all reading history? This cannot be undone.")) return;
+    if (
+      !(await confirm({
+        message: "Clear all reading history? This cannot be undone.",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
     setClearing(true);
     try {
       await tome.clearHistory();

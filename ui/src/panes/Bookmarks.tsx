@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { useConfirm, usePrompt } from "../components/Dialog";
+import PathField from "../components/PathField";
 import { tome } from "../service";
 import { Bookmark, BookmarkFolder, isTauri } from "../types";
 
@@ -20,6 +22,8 @@ interface BookmarksProps {
  *   `"all"` → "All bookmarks" across folders (uses all_bookmarks)
  */
 export default function Bookmarks({ onOpen }: BookmarksProps) {
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const [folders, setFolders] = useState<BookmarkFolder[]>([]);
   const [activeFolder, setActiveFolder] = useState<"all" | number | null>("all");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -53,7 +57,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
   }, [activeFolder]);
 
   async function newFolder() {
-    const name = prompt("Folder name?")?.trim();
+    const name = (await prompt({ title: "Folder name" }))?.trim();
     if (!name) return;
     try {
       await tome.createFolder(name, null);
@@ -64,7 +68,9 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
   }
 
   async function rename(folder: BookmarkFolder) {
-    const name = prompt("Rename folder", folder.name)?.trim();
+    const name = (
+      await prompt({ title: "Rename folder", defaultValue: folder.name })
+    )?.trim();
     if (!name || name === folder.name) return;
     try {
       await tome.renameFolder(folder.id, name);
@@ -76,9 +82,10 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
 
   async function removeFolder(folder: BookmarkFolder) {
     if (
-      !confirm(
-        `Delete folder "${folder.name}"? Bookmarks inside it will become unfiled.`,
-      )
+      !(await confirm({
+        message: `Delete folder "${folder.name}"? Bookmarks inside it will become unfiled.`,
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -249,6 +256,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
  * non-destructive merge; "replace" is opt-in and confirmed.
  */
 function BackupSection({ onChanged }: { onChanged: () => void }) {
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [exportPath, setExportPath] = useState("");
   const [importPath, setImportPath] = useState("");
@@ -283,9 +291,11 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
     }
     if (
       replace &&
-      !confirm(
-        "Replace ALL current bookmarks and folders with this backup? This cannot be undone.",
-      )
+      !(await confirm({
+        message:
+          "Replace ALL current bookmarks and folders with this backup? This cannot be undone.",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -331,14 +341,17 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
               Export to a backup file
             </label>
             <div className="flex gap-2">
-              <input
-                type="text"
-                value={exportPath}
-                onChange={(e) => setExportPath(e.target.value)}
-                disabled={busy}
-                placeholder="folder path, or full path ending in .json"
-                className="flex-1 px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
-              />
+              <div className="flex-1">
+                <PathField
+                  value={exportPath}
+                  onChange={setExportPath}
+                  mode="saveFile"
+                  filters={[{ name: "JSON", extensions: ["json"] }]}
+                  defaultFileName="tome-bookmarks.json"
+                  placeholder="folder path, or full path ending in .json"
+                  disabled={busy}
+                />
+              </div>
               <button
                 type="button"
                 onClick={doExport}
@@ -357,14 +370,16 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
               Restore from a backup file
             </label>
             <div className="flex gap-2">
-              <input
-                type="text"
-                value={importPath}
-                onChange={(e) => setImportPath(e.target.value)}
-                disabled={busy}
-                placeholder="/path/to/tome-bookmarks.json"
-                className="flex-1 px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
-              />
+              <div className="flex-1">
+                <PathField
+                  value={importPath}
+                  onChange={setImportPath}
+                  mode="openFile"
+                  filters={[{ name: "JSON", extensions: ["json"] }]}
+                  placeholder="/path/to/tome-bookmarks.json"
+                  disabled={busy}
+                />
+              </div>
               <button
                 type="button"
                 onClick={doImport}

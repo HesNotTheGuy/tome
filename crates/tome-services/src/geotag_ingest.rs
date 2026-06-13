@@ -18,6 +18,7 @@
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flate2::read::GzDecoder;
 use tome_core::{Result, TomeError};
@@ -28,7 +29,15 @@ const INSERT_PREFIX: &str = "INSERT INTO `geo_tags` VALUES ";
 /// Decompressed bytes pulled from the gzip stream per read.
 const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
 
-pub fn parse_file<F: FnMut(Geotag)>(path: &Path, mut on_geotag: F) -> Result<u64> {
+/// `cancel` is checked once per decompressed chunk (~1 MiB), so a user's
+/// cancel click takes effect within milliseconds even on a multi-GB dump;
+/// returns [`TomeError::Cancelled`] so the caller can distinguish "user
+/// changed their mind" from a real parse failure.
+pub fn parse_file<F: FnMut(Geotag)>(
+    path: &Path,
+    cancel: &AtomicBool,
+    mut on_geotag: F,
+) -> Result<u64> {
     let file = File::open(path)
         .map_err(|e| TomeError::Other(format!("open geotag dump {path:?}: {e}")))?;
     // Stream the gzip in bounded chunks instead of decompressing the whole
@@ -42,6 +51,9 @@ pub fn parse_file<F: FnMut(Geotag)>(path: &Path, mut on_geotag: F) -> Result<u64
     let mut pending: Vec<u8> = Vec::new();
     let mut count = 0_u64;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(TomeError::Cancelled);
+        }
         let n = decoder
             .read(&mut chunk)
             .map_err(|e| TomeError::Other(format!("decompress geotag dump: {e}")))?;

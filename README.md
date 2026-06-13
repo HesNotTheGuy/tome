@@ -44,6 +44,10 @@ Offline Wikipedia, with control. Tome reads Wikipedia's official multistream XML
 - **WebView differences** — Tome runs in WebView2 (Win), WKWebView (mac), and WebKitGTK (Linux). Subtle CSS/JS rendering differences exist; we don't currently test all three matrices.
 - **Strictly offline once configured.** Tome talks to the network only for: live Wikipedia article HTML when an article isn't in your local dump, MediaWiki revision metadata when you open the timeline, and (if you opt in) HuggingFace for one-time model downloads. The Map pane has no online fallback at all — if you don't supply an offline `.pmtiles`, you see pins on a blank background.
 
+## Going fully offline
+
+Once prepared, every feature — reading, search, Browse, the Map, Ask Tome — works with no internet at all; flip on Offline mode in Settings → Network and Tome never touches it again. Preparation means gathering a handful of files while you still have a connection: the dump + index pair (required), three optional SQL tables, a `.pmtiles` basemap, and two AI models. The full checklist with sizes, download links, set-up order, and offline troubleshooting is in [docs/OFFLINE-SURVIVAL-KIT.md](docs/OFFLINE-SURVIVAL-KIT.md) — it's written to be printed and followed by someone non-technical, so it's the thing to hand to whoever you're setting a machine up for.
+
 ## Building
 
 You'll need:

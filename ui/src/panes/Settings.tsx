@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { tome } from "../service";
+import PathField from "../components/PathField";
 import {
   CategoryIngestSummary,
   GeotagSummary,
@@ -12,6 +13,7 @@ import {
 interface SettingsState {
   killSwitch: boolean;
   breakerOpen: boolean;
+  offline: boolean;
   userAgent: string;
   tierCounts: TierCounts;
   recommendationsEnabled: boolean;
@@ -20,10 +22,18 @@ interface SettingsState {
 const EMPTY: SettingsState = {
   killSwitch: false,
   breakerOpen: false,
+  offline: false,
   userAgent: "Tome/1.0 (+https://github.com/HesNotTheGuy/tome)",
   tierCounts: { hot: 0, warm: 0, cold: 0, evicted: 0 },
   recommendationsEnabled: true,
 };
+
+/** True when an ingest rejection was a user-initiated cancellation, not a real
+ *  error. The backend maps TomeError::Cancelled to a string containing
+ *  "cancelled"; we treat those neutrally instead of as a failure. */
+function isCancellation(message: string): boolean {
+  return message.toLowerCase().includes("cancelled");
+}
 
 export default function Settings() {
   const [state, setState] = useState<SettingsState>(EMPTY);
@@ -35,12 +45,14 @@ export default function Settings() {
       const [
         killSwitch,
         breakerOpen,
+        offline,
         userAgent,
         tierCounts,
         recommendationsEnabled,
       ] = await Promise.all([
         tome.killSwitchEngaged(),
         tome.breakerOpen(),
+        tome.offlineMode(),
         tome.userAgent(),
         tome.tierCounts(),
         tome.recommendationsEnabled(),
@@ -48,6 +60,7 @@ export default function Settings() {
       setState({
         killSwitch,
         breakerOpen,
+        offline,
         userAgent,
         tierCounts,
         recommendationsEnabled,
@@ -64,6 +77,19 @@ export default function Settings() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function toggleOffline() {
+    if (!isTauri()) return;
+    const next = !state.offline;
+    try {
+      await tome.setOfflineMode(next);
+      // Offline mode drives the kill switch, so re-read both to keep the
+      // lower-level "Block outbound traffic" display in sync.
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function toggleKillSwitch() {
     if (!isTauri()) return;
@@ -90,25 +116,50 @@ export default function Settings() {
   return (
     <section className="px-6 py-6 max-w-3xl mx-auto">
       <h2 className="text-2xl font-bold mb-1">Settings</h2>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">
-        Outbound API behavior and storage status. More controls land as
-        features ship (dump path, ingestion, schedules, debug log).
+      <p className="text-sm text-tome-muted mb-6">
+        Network behavior and storage status. More controls land as features
+        ship (dump path, ingestion, schedules, debug log).
       </p>
 
       {!isTauri() && (
-        <div className="p-4 mb-6 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 text-sm">
+        <div className="p-4 mb-6 rounded border border-tome-border bg-tome-surface-2 text-sm text-tome-muted">
           Running outside the Tauri shell — values are placeholders.
         </div>
       )}
 
       {error && (
-        <div className="p-4 mb-6 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 text-sm text-red-700 dark:text-red-300">
+        <div className="p-4 mb-6 rounded border border-tome-border bg-tome-surface text-sm text-tome-danger">
           {error}
         </div>
       )}
 
-      <Section title="Outbound traffic">
-        <Row label="Kill switch">
+      <Section title="Internet access">
+        <Row label="Offline mode">
+          <button
+            type="button"
+            onClick={toggleOffline}
+            disabled={!isTauri()}
+            className={
+              "px-3 py-1 text-sm rounded transition-colors " +
+              (state.offline
+                ? "text-white"
+                : "bg-tome-bg text-tome-muted border border-tome-border hover:bg-tome-surface-2")
+            }
+            style={
+              state.offline
+                ? { backgroundColor: "var(--tome-success)" }
+                : undefined
+            }
+          >
+            {state.offline ? "ON — fully offline" : "click to turn on"}
+          </button>
+        </Row>
+        <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+          Block all internet access. Every article reads from your local data
+          instantly — no network attempts, no waiting. Turn this on before you
+          disconnect.
+        </div>
+        <Row label="Block outbound traffic">
           <button
             type="button"
             onClick={toggleKillSwitch}
@@ -116,27 +167,39 @@ export default function Settings() {
             className={
               "px-3 py-1 text-sm rounded transition-colors " +
               (state.killSwitch
-                ? "bg-red-600 text-white hover:bg-red-700"
-                : "bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-700")
+                ? "text-white"
+                : "bg-tome-surface-2 text-tome-text hover:bg-tome-border")
+            }
+            style={
+              state.killSwitch
+                ? { backgroundColor: "var(--tome-danger)" }
+                : undefined
             }
           >
             {state.killSwitch ? "ENGAGED — outbound disabled" : "click to engage"}
           </button>
         </Row>
+        <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+          The lower-level switch behind offline mode. When engaged, Tome makes
+          no outbound network calls at all. Turning offline mode on engages
+          this automatically.
+        </div>
         <Row label="Circuit breaker">
           <span
             className={
               "text-sm font-mono " +
-              (state.breakerOpen
-                ? "text-red-600 dark:text-red-400"
-                : "text-emerald-600 dark:text-emerald-400")
+              (state.breakerOpen ? "text-tome-danger" : "text-tome-success")
             }
           >
             {state.breakerOpen ? "OPEN (cooldown active)" : "closed"}
           </span>
         </Row>
+        <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
+          Pauses network calls after repeated failures; clears itself
+          automatically.
+        </div>
         <Row label="User-Agent">
-          <code className="text-xs text-zinc-600 dark:text-zinc-400 break-all">
+          <code className="text-xs text-tome-muted break-all">
             {state.userAgent}
           </code>
         </Row>
@@ -217,6 +280,7 @@ function DumpPathSection() {
     "idle",
   );
   const [error, setError] = useState<string | null>(null);
+  const [docCount, setDocCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -227,6 +291,10 @@ function DumpPathSection() {
         setDraft(p ?? "");
       })
       .catch((e) => setError(String(e)));
+    tome
+      .searchDocCount()
+      .then(setDocCount)
+      .catch(() => setDocCount(null));
   }, []);
 
   async function save() {
@@ -273,13 +341,13 @@ function DumpPathSection() {
           and reads bytes on demand. Required for Cold-tier reads (everything
           you haven&apos;t pulled into Hot or Warm).
         </p>
-        <input
-          type="text"
+        <PathField
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={setDraft}
+          mode="openFile"
+          filters={[{ name: "bzip2", extensions: ["bz2"] }]}
           disabled={phase === "saving"}
           placeholder="/path/to/enwiki-YYYYMMDD-pages-articles-multistream.xml.bz2"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
         />
         <div className="flex items-center justify-between gap-3">
           <div className="flex gap-2">
@@ -318,6 +386,24 @@ function DumpPathSection() {
             )}
           </span>
         </div>
+        <div className="text-xs text-tome-muted border-t border-tome-border pt-3">
+          {docCount === null ? (
+            <span>—</span>
+          ) : docCount > 0 ? (
+            <span className="font-mono text-tome-text">
+              {docCount.toLocaleString()}
+            </span>
+          ) : null}
+          {docCount !== null &&
+            (docCount > 0 ? (
+              <span> titles searchable</span>
+            ) : (
+              <span>
+                Search index empty — ingest the multistream index to enable
+                search.
+              </span>
+            ))}
+        </div>
       </div>
     </div>
   );
@@ -325,9 +411,9 @@ function DumpPathSection() {
 
 function IngestSection({ onComplete }: { onComplete: () => void }) {
   const [path, setPath] = useState("");
-  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "running" | "done" | "error" | "cancelled"
+  >("idle");
   const [count, setCount] = useState(0);
   const [summary, setSummary] = useState<IngestSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -367,56 +453,80 @@ function IngestSection({ onComplete }: { onComplete: () => void }) {
       setPhase("done");
       onComplete();
     } catch (e) {
-      setError(String(e));
-      setPhase("error");
+      const msg = String(e);
+      if (isCancellation(msg)) {
+        setError(null);
+        setPhase("cancelled");
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
     }
   }
 
   return (
     <div className="mb-8">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
         Dump ingestion
       </h3>
-      <div className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3">
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+      <div className="rounded border border-tome-border bg-tome-surface p-4 space-y-3">
+        <p className="text-xs text-tome-muted">
           Point Tome at a downloaded{" "}
-          <code className="text-[11px] px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded">
+          <code className="text-[11px] px-1 py-0.5 bg-tome-surface-2 rounded">
             *-multistream-index.txt.bz2
           </code>{" "}
           file. Tome streams the index and records each article&apos;s offset
           as Cold-tier metadata. The dump itself is read on-demand later.
         </p>
+        <p className="text-xs text-tome-muted">
+          Unlocks reading + title search. ~1–5 min.
+        </p>
 
-        <input
-          type="text"
+        <PathField
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
+          mode="openFile"
+          filters={[{ name: "bzip2", extensions: ["bz2"] }]}
           disabled={phase === "running"}
           placeholder="/path/to/enwiki-YYYYMMDD-pages-articles-multistream-index.txt.bz2"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 disabled:opacity-50"
         />
 
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleIngest}
-            disabled={phase === "running" || !isTauri()}
-            className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed"
-          >
-            {phase === "running"
-              ? `Ingesting… ${count.toLocaleString()} entries`
-              : "Begin ingest"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleIngest}
+              disabled={phase === "running" || !isTauri()}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "running"
+                ? `Ingesting… ${count.toLocaleString()} entries`
+                : "Begin ingest"}
+            </button>
+            {phase === "running" && (
+              <button
+                type="button"
+                onClick={() => tome.cancelIngest()}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
           {phase === "done" && summary && (
-            <span className="text-xs text-emerald-700 dark:text-emerald-400">
+            <span className="text-xs text-tome-success">
               ✓ {summary.entries_processed.toLocaleString()} entries in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
             </span>
           )}
-          {phase === "error" && error && (
-            <span className="text-xs text-red-600 dark:text-red-400">
-              {error}
+          {phase === "cancelled" && (
+            <span className="text-xs text-tome-muted">
+              Cancelled — progress so far was kept
             </span>
+          )}
+          {phase === "error" && error && (
+            <span className="text-xs text-tome-danger">{error}</span>
           )}
         </div>
       </div>
@@ -433,10 +543,10 @@ function Section({
 }) {
   return (
     <div className="mb-8">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-tome-muted mb-2">
         {title}
       </h3>
-      <div className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 divide-y divide-zinc-200 dark:divide-zinc-800">
+      <div className="rounded border border-tome-border bg-tome-surface divide-y divide-tome-border">
         {children}
       </div>
     </div>
@@ -452,7 +562,7 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <span className="text-sm text-zinc-700 dark:text-zinc-300">{label}</span>
+      <span className="text-sm text-tome-text">{label}</span>
       <div>{children}</div>
     </div>
   );
@@ -461,9 +571,9 @@ function Row({
 function CategorylinksSection() {
   const [path, setPath] = useState("");
   const [count, setCount] = useState<number | null>(null);
-  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "running" | "done" | "error" | "cancelled"
+  >("idle");
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<CategoryIngestSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -500,8 +610,16 @@ function CategorylinksSection() {
       const updated = await tome.countCategorylinks();
       setCount(updated);
     } catch (e) {
-      setError(String(e));
-      setPhase("error");
+      const msg = String(e);
+      if (isCancellation(msg)) {
+        setError(null);
+        setPhase("cancelled");
+        const updated = await tome.countCategorylinks().catch(() => null);
+        setCount(updated);
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
     }
   }
 
@@ -519,6 +637,10 @@ function CategorylinksSection() {
           to enable category browsing. ~28 MB simplewiki, ~2.4 GB enwiki.
           The Browse pane appears once any categorylinks are ingested.
         </p>
+        <p className="text-xs text-tome-muted">
+          Unlocks the Browse pane and related-article suggestions. Can take
+          30+ min on full enwiki. Keep the app open while it runs.
+        </p>
         <div className="text-xs text-tome-muted">
           Currently stored:{" "}
           <span className="font-mono text-tome-text">
@@ -527,30 +649,46 @@ function CategorylinksSection() {
           links
         </div>
 
-        <input
-          type="text"
+        <PathField
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
+          mode="openFile"
+          filters={[{ name: "gzip", extensions: ["gz"] }]}
           disabled={phase === "running"}
           placeholder="/path/to/simplewiki-latest-categorylinks.sql.gz"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
         />
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleIngest}
-            disabled={phase === "running" || !isTauri()}
-            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ backgroundColor: "var(--tome-accent)" }}
-          >
-            {phase === "running"
-              ? `Ingesting… ${progress.toLocaleString()}`
-              : "Ingest categorylinks"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleIngest}
+              disabled={phase === "running" || !isTauri()}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "running"
+                ? `Ingesting… ${progress.toLocaleString()}`
+                : "Ingest categorylinks"}
+            </button>
+            {phase === "running" && (
+              <button
+                type="button"
+                onClick={() => tome.cancelIngest()}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
           {phase === "done" && summary && (
             <span className="text-xs text-tome-success">
               ✓ {summary.entries_processed.toLocaleString()} links in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "cancelled" && (
+            <span className="text-xs text-tome-muted">
+              Cancelled — progress so far was kept
             </span>
           )}
           {phase === "error" && error && (
@@ -565,9 +703,9 @@ function CategorylinksSection() {
 function RedirectsSection() {
   const [path, setPath] = useState("");
   const [count, setCount] = useState<number | null>(null);
-  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "running" | "done" | "error" | "cancelled"
+  >("idle");
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<RedirectIngestSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -604,8 +742,16 @@ function RedirectsSection() {
       const updated = await tome.countRedirects();
       setCount(updated);
     } catch (e) {
-      setError(String(e));
-      setPhase("error");
+      const msg = String(e);
+      if (isCancellation(msg)) {
+        setError(null);
+        setPhase("cancelled");
+        const updated = await tome.countRedirects().catch(() => null);
+        setCount(updated);
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
     }
   }
 
@@ -623,6 +769,9 @@ function RedirectsSection() {
           so that typing &quot;USA&quot; lands on &quot;United States&quot;.
           ~1 MB simplewiki, ~250 MB enwiki.
         </p>
+        <p className="text-xs text-tome-muted">
+          Makes &quot;USA&quot; open &quot;United States&quot;. A few minutes.
+        </p>
         <div className="text-xs text-tome-muted">
           Currently stored:{" "}
           <span className="font-mono text-tome-text">
@@ -631,30 +780,46 @@ function RedirectsSection() {
           redirects
         </div>
 
-        <input
-          type="text"
+        <PathField
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
+          mode="openFile"
+          filters={[{ name: "gzip", extensions: ["gz"] }]}
           disabled={phase === "running"}
           placeholder="/path/to/simplewiki-latest-redirect.sql.gz"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
         />
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleIngest}
-            disabled={phase === "running" || !isTauri()}
-            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ backgroundColor: "var(--tome-accent)" }}
-          >
-            {phase === "running"
-              ? `Ingesting… ${progress.toLocaleString()}`
-              : "Ingest redirects"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleIngest}
+              disabled={phase === "running" || !isTauri()}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "running"
+                ? `Ingesting… ${progress.toLocaleString()}`
+                : "Ingest redirects"}
+            </button>
+            {phase === "running" && (
+              <button
+                type="button"
+                onClick={() => tome.cancelIngest()}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
           {phase === "done" && summary && (
             <span className="text-xs text-tome-success">
               ✓ {summary.entries_processed.toLocaleString()} redirects in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "cancelled" && (
+            <span className="text-xs text-tome-muted">
+              Cancelled — progress so far was kept
             </span>
           )}
           {phase === "error" && error && (
@@ -669,9 +834,9 @@ function RedirectsSection() {
 function GeotagSection() {
   const [path, setPath] = useState("");
   const [count, setCount] = useState<number | null>(null);
-  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "running" | "done" | "error" | "cancelled"
+  >("idle");
   const [progress, setProgress] = useState(0);
   const [summary, setSummary] = useState<GeotagSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -705,8 +870,16 @@ function GeotagSection() {
       const updated = await tome.countGeotags();
       setCount(updated);
     } catch (e) {
-      setError(String(e));
-      setPhase("error");
+      const msg = String(e);
+      if (isCancellation(msg)) {
+        setError(null);
+        setPhase("cancelled");
+        const updated = await tome.countGeotags().catch(() => null);
+        setCount(updated);
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
     }
   }
 
@@ -725,6 +898,9 @@ function GeotagSection() {
           simple, ~50 MB enwiki). Once ingested, the Reader shows
           coordinates on geographic articles.
         </p>
+        <p className="text-xs text-tome-muted">
+          Unlocks map pins and article coordinates. A few minutes.
+        </p>
         <div className="flex items-center justify-between text-xs text-tome-muted">
           <span>
             Currently stored:{" "}
@@ -735,30 +911,46 @@ function GeotagSection() {
           </span>
         </div>
 
-        <input
-          type="text"
+        <PathField
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
+          mode="openFile"
+          filters={[{ name: "gzip", extensions: ["gz"] }]}
           disabled={phase === "running"}
           placeholder="/path/to/simplewiki-latest-geo_tags.sql.gz"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
         />
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleIngest}
-            disabled={phase === "running" || !isTauri()}
-            className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ backgroundColor: "var(--tome-accent)" }}
-          >
-            {phase === "running"
-              ? `Ingesting… ${progress.toLocaleString()}`
-              : "Ingest geotags"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleIngest}
+              disabled={phase === "running" || !isTauri()}
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {phase === "running"
+                ? `Ingesting… ${progress.toLocaleString()}`
+                : "Ingest geotags"}
+            </button>
+            {phase === "running" && (
+              <button
+                type="button"
+                onClick={() => tome.cancelIngest()}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
           {phase === "done" && summary && (
             <span className="text-xs text-tome-success">
               ✓ {summary.entries_processed.toLocaleString()} geotags in{" "}
               {(summary.elapsed_ms / 1000).toFixed(1)}s
+            </span>
+          )}
+          {phase === "cancelled" && (
+            <span className="text-xs text-tome-muted">
+              Cancelled — progress so far was kept
             </span>
           )}
           {phase === "error" && error && (
@@ -846,13 +1038,13 @@ function MapSourceSection() {
           </span>
         </div>
 
-        <input
-          type="text"
+        <PathField
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
+          mode="openFile"
+          filters={[{ name: "PMTiles", extensions: ["pmtiles"] }]}
           disabled={phase === "saving"}
           placeholder="/path/to/world.pmtiles"
-          className="w-full px-2 py-1 text-xs font-mono rounded border border-tome-border bg-tome-bg disabled:opacity-50"
         />
         <div className="flex items-center justify-between gap-3">
           <div className="flex gap-2">
@@ -972,6 +1164,14 @@ function ChatModelSection() {
   const [bytes, setBytes] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [diskCheck, setDiskCheck] = useState<import("../types").DiskSpaceCheck | null>(null);
+  // Side-load: a path to a .gguf the user already has (e.g. on a USB drive).
+  // When set, the downloader is unnecessary — Ask Tome reads from this file.
+  const [sideloadPath, setSideloadPath] = useState<string | null>(null);
+  const [sideloadDraft, setSideloadDraft] = useState("");
+  const [sideloadPhase, setSideloadPhase] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [sideloadError, setSideloadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -979,7 +1179,47 @@ function ChatModelSection() {
       .chatModelPresent()
       .then(setPresent)
       .catch(() => setPresent(null));
+    tome
+      .chatModelPath()
+      .then((p) => {
+        setSideloadPath(p);
+        setSideloadDraft(p ?? "");
+      })
+      .catch(() => setSideloadPath(null));
   }, []);
+
+  async function saveSideload() {
+    if (!isTauri()) return;
+    setSideloadPhase("saving");
+    setSideloadError(null);
+    try {
+      const next =
+        sideloadDraft.trim().length > 0 ? sideloadDraft.trim() : null;
+      await tome.setChatModelPath(next);
+      setSideloadPath(next);
+      setSideloadPhase("saved");
+      setTimeout(() => setSideloadPhase("idle"), 2000);
+    } catch (e) {
+      setSideloadError(String(e));
+      setSideloadPhase("error");
+    }
+  }
+
+  async function clearSideload() {
+    if (!isTauri()) return;
+    setSideloadPhase("saving");
+    setSideloadError(null);
+    try {
+      await tome.setChatModelPath(null);
+      setSideloadPath(null);
+      setSideloadDraft("");
+      setSideloadPhase("saved");
+      setTimeout(() => setSideloadPhase("idle"), 2000);
+    } catch (e) {
+      setSideloadError(String(e));
+      setSideloadPhase("error");
+    }
+  }
 
   // Pre-flight: run the disk-space check, surface a warning modal if
   // it would leave the volume below the 15% threshold. Warn-only —
@@ -1027,14 +1267,22 @@ function ChatModelSection() {
         </span>
       </Row>
       <Row label="Status">
-        {present === null && (
-          <span className="text-xs text-tome-muted">checking…</span>
-        )}
-        {present === true && (
-          <span className="text-xs text-tome-success">✓ downloaded</span>
-        )}
-        {present === false && (
-          <span className="text-xs text-tome-muted">not downloaded</span>
+        {sideloadPath ? (
+          <span className="text-xs text-tome-success">
+            ✓ using side-loaded file
+          </span>
+        ) : (
+          <>
+            {present === null && (
+              <span className="text-xs text-tome-muted">checking…</span>
+            )}
+            {present === true && (
+              <span className="text-xs text-tome-success">✓ downloaded</span>
+            )}
+            {present === false && (
+              <span className="text-xs text-tome-muted">not downloaded</span>
+            )}
+          </>
         )}
       </Row>
       <Row label="">
@@ -1046,6 +1294,7 @@ function ChatModelSection() {
               phase === "downloading" ||
               phase === "checking" ||
               present === true ||
+              sideloadPath !== null ||
               !isTauri()
             }
             className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1057,9 +1306,11 @@ function ChatModelSection() {
                 ? bytes > 0
                   ? `Downloading… ${(bytes / (1024 * 1024)).toFixed(1)} MB`
                   : "Downloading…"
-                : present
-                  ? "Already on disk"
-                  : "Download"}
+                : sideloadPath
+                  ? "Not needed — file side-loaded"
+                  : present
+                    ? "Already on disk"
+                    : "Download"}
           </button>
           {phase === "error" && error && (
             <span className="text-xs text-tome-danger">{error}</span>
@@ -1067,11 +1318,65 @@ function ChatModelSection() {
         </div>
       </Row>
       <div className="px-4 py-3 text-xs text-tome-muted border-t border-tome-border">
-        One-time download from HuggingFace. Once on disk, &quot;Ask Tome&quot;
-        in the Reader will answer questions with citations to source
-        articles — fully offline, no cloud calls. We run a quick
-        disk-space check before starting and warn if the download would
-        leave your drive uncomfortably full.
+        One-time download from HuggingFace (needs internet). Once on disk,
+        &quot;Ask Tome&quot; in the Reader will answer questions with
+        citations to source articles — fully offline, no cloud calls. We run
+        a quick disk-space check before starting and warn if the download
+        would leave your drive uncomfortably full. No connection? Side-load
+        the model file below instead.
+      </div>
+
+      <div className="px-4 py-3 border-t border-tome-border space-y-3">
+        <p className="text-xs text-tome-muted">
+          Already have the model file? Point Tome at it (e.g. on a USB drive)
+          to use Ask Tome fully offline — no download needed.
+        </p>
+        <PathField
+          value={sideloadDraft}
+          onChange={setSideloadDraft}
+          mode="openFile"
+          filters={[{ name: "GGUF model", extensions: ["gguf"] }]}
+          disabled={sideloadPhase === "saving" || !isTauri()}
+          placeholder="/path/to/model.gguf"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={saveSideload}
+              disabled={
+                sideloadPhase === "saving" ||
+                !isTauri() ||
+                sideloadDraft.trim() === (sideloadPath ?? "")
+              }
+              className="px-3 py-1 text-sm rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "var(--tome-accent)" }}
+            >
+              {sideloadPhase === "saving" ? "Saving…" : "Use this file"}
+            </button>
+            {sideloadPath && (
+              <button
+                type="button"
+                onClick={clearSideload}
+                disabled={sideloadPhase === "saving" || !isTauri()}
+                className="px-3 py-1 text-sm rounded border border-tome-border text-tome-muted hover:bg-tome-surface-2 disabled:opacity-50"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-tome-muted">
+            {sideloadPhase === "saved" && (
+              <span className="text-tome-success">✓ saved</span>
+            )}
+            {sideloadPhase === "error" && sideloadError && (
+              <span className="text-tome-danger">{sideloadError}</span>
+            )}
+            {sideloadPhase === "idle" && sideloadPath && (
+              <span>reverts to downloader on Clear</span>
+            )}
+          </span>
+        </div>
       </div>
 
       {phase === "warning" && diskCheck && (

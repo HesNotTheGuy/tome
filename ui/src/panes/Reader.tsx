@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { tome } from "../service";
 import {
   ArticleResponse,
@@ -14,9 +14,28 @@ import Timeline from "../components/Timeline";
 interface ReaderProps {
   title: string | null;
   onNavigate: (title: string) => void;
+  onBack?: () => void;
+  onForward?: () => void;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
 }
 
-export default function Reader({ title, onNavigate }: ReaderProps) {
+/** Reading text-size multipliers the A−/A+ buttons cycle through. */
+const FONT_SCALES = [0.9, 1.0, 1.15, 1.3, 1.5];
+const FONT_SCALE_KEY = "tome:fontScale";
+
+/** Per-session scroll memory, keyed by the title the user navigated to, so
+ *  going back lands where you left off instead of at the top. */
+const scrollPositions = new Map<string, number>();
+
+export default function Reader({
+  title,
+  onNavigate,
+  onBack,
+  onForward,
+  canGoBack,
+  canGoForward,
+}: ReaderProps) {
   const [response, setResponse] = useState<ArticleResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +44,24 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
   const [revError, setRevError] = useState<string | null>(null);
   const [geotag, setGeotag] = useState<Geotag | null>(null);
   const [related, setRelated] = useState<RelatedArticle[]>([]);
+  const [fontScale, setFontScale] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(FONT_SCALE_KEY));
+    return FONT_SCALES.includes(saved) ? saved : 1.0;
+  });
+
+  function bumpFont(dir: -1 | 1) {
+    setFontScale((cur) => {
+      const i = FONT_SCALES.indexOf(cur);
+      const next = FONT_SCALES[Math.min(FONT_SCALES.length - 1, Math.max(0, i + dir))]!;
+      localStorage.setItem(FONT_SCALE_KEY, String(next));
+      return next;
+    });
+  }
+
+  // Table of contents, derived from the heading anchors (`id="s-…"`) the
+  // renderer emits. Parsed from the HTML string so it stays in sync with
+  // whatever the backend produced, API-HTML or local render alike.
+  const toc = useMemo(() => extractToc(response?.html ?? ""), [response?.html]);
 
   // Look up the geotag for the current article (if any) when the title
   // changes. Silent failures — if we have no geotags ingested or the
@@ -94,6 +131,25 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, [title]);
+
+  // Scroll memory: save the outgoing article's scroll position when the title
+  // changes (or the pane unmounts), so back/forward returns you where you
+  // were. The scrollable element is App's <main>.
+  useEffect(() => {
+    if (!title) return;
+    const main = document.querySelector("main");
+    return () => {
+      if (main) scrollPositions.set(title, main.scrollTop);
+    };
+  }, [title]);
+
+  // Restore (or reset to top for a freshly-opened article) once the content
+  // for this title is in the DOM.
+  useEffect(() => {
+    if (!response || !title) return;
+    const main = document.querySelector("main");
+    if (main) main.scrollTop = scrollPositions.get(title) ?? 0;
+  }, [response, title]);
 
   async function loadRevisions() {
     if (!title || !isTauri()) return;
@@ -196,6 +252,48 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
           {geotag && <CoordsBadge geotag={geotag} />}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center mr-1">
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={!canGoBack}
+              title="Back"
+              aria-label="Back to previous article"
+              className="text-sm px-2 py-1 rounded text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={onForward}
+              disabled={!canGoForward}
+              title="Forward"
+              aria-label="Forward"
+              className="text-sm px-2 py-1 rounded text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              →
+            </button>
+          </div>
+          <div className="flex items-center mr-1" title="Text size">
+            <button
+              type="button"
+              onClick={() => bumpFont(-1)}
+              disabled={fontScale === FONT_SCALES[0]}
+              aria-label="Decrease text size"
+              className="text-xs px-1.5 py-1 rounded text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text disabled:opacity-30"
+            >
+              A−
+            </button>
+            <button
+              type="button"
+              onClick={() => bumpFont(1)}
+              disabled={fontScale === FONT_SCALES[FONT_SCALES.length - 1]}
+              aria-label="Increase text size"
+              className="text-sm px-1.5 py-1 rounded text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text disabled:opacity-30"
+            >
+              A+
+            </button>
+          </div>
           <BookmarkButton articleTitle={response?.title ?? title ?? ""} />
           <button
             type="button"
@@ -241,8 +339,10 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
 
       {response && !loading && !error && (
         <>
+          {toc.length >= 3 && <TableOfContents items={toc} />}
           <article
             className="tome-article"
+            style={{ fontSize: `${fontScale}em` }}
             // Renderer output is escaped server-side; we trust our own backend.
             dangerouslySetInnerHTML={{ __html: response.html }}
           />
@@ -253,6 +353,67 @@ export default function Reader({ title, onNavigate }: ReaderProps) {
       )}
       <AskTome articleTitle={response?.title ?? title} onOpenArticle={onNavigate} />
     </div>
+  );
+}
+
+interface TocEntry {
+  id: string;
+  text: string;
+  level: number; // 2 = h2, 3 = h3
+}
+
+/**
+ * Pull a table of contents out of rendered article HTML by reading the
+ * `id`-bearing h2/h3 headings the renderer emits. Uses the browser's own
+ * parser (no regex-on-HTML) and never executes the markup. Deeper headings
+ * (h4+) are omitted to keep the TOC scannable.
+ */
+function extractToc(html: string): TocEntry[] {
+  if (!html) return [];
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const out: TocEntry[] = [];
+  doc.querySelectorAll("h2[id], h3[id]").forEach((el) => {
+    const id = el.getAttribute("id");
+    const text = el.textContent?.trim();
+    if (id && text) {
+      out.push({ id, text, level: el.tagName === "H3" ? 3 : 2 });
+    }
+  });
+  return out;
+}
+
+function TableOfContents({ items }: { items: TocEntry[] }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <nav className="tome-toc max-w-3xl mx-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between font-semibold uppercase tracking-wide text-tome-muted text-xs"
+      >
+        <span>Contents</span>
+        <span>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-1">
+          {items.map((it) => (
+            <li key={it.id} className={it.level === 3 ? "pl-4" : ""}>
+              <a
+                href={`#${it.id}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById(it.id)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                {it.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </nav>
   );
 }
 

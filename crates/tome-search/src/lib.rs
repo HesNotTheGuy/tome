@@ -5,9 +5,9 @@
 //! feed pages to the [`Writer`] in batches. The full corpus is never
 //! resident in memory; the memory ceiling is one stream + one writer batch.
 //!
-//! Queries use BM25 ranking out of the box. The schema indexes title and
-//! body separately so prefix/exact title matches can be boosted in the
-//! future without re-indexing.
+//! Queries use BM25 ranking with the title field boosted 3x over body, plus
+//! a fuzzy-title fallback (edit distance 1) for single-word queries that
+//! come up short — typo tolerance like Wikipedia's search box.
 
 pub mod index;
 pub mod query;
