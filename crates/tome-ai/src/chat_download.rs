@@ -347,10 +347,7 @@ mod tests {
             "error must name the configured path; got: {msg}"
         );
         assert!(msg.contains("Settings"), "got: {msg}");
-        assert!(
-            msg.contains("clear it to use the downloader"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("clear it to use the downloader"), "got: {msg}");
     }
 
     /// Without an explicit path the stub's behavior is unchanged: a clear

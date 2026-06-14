@@ -142,7 +142,11 @@ pub struct ParsedBackup {
 impl BookmarkExport {
     /// Build an envelope from live storage rows. `id_to_name` resolution is
     /// done here so the rest of the format logic never sees a numeric id.
-    pub fn build(folders: &[BookmarkFolder], bookmarks: &[Bookmark], exported_at: Option<i64>) -> Self {
+    pub fn build(
+        folders: &[BookmarkFolder],
+        bookmarks: &[Bookmark],
+        exported_at: Option<i64>,
+    ) -> Self {
         // id -> name lookup so we can express parent/folder links by name.
         let id_to_name: std::collections::HashMap<i64, String> =
             folders.iter().map(|f| (f.id, f.name.clone())).collect();
@@ -251,9 +255,8 @@ pub fn parse(text: &str) -> Result<ParsedBackup> {
     // unknown fields handles the best-effort read below.
     let migrated = migrate_to_current(value, source_format_version);
 
-    let export: BookmarkExport = serde_json::from_value(migrated).map_err(|e| {
-        TomeError::Other(format!("backup structure could not be read: {e}"))
-    })?;
+    let export: BookmarkExport = serde_json::from_value(migrated)
+        .map_err(|e| TomeError::Other(format!("backup structure could not be read: {e}")))?;
 
     Ok(ParsedBackup {
         export,
@@ -327,7 +330,12 @@ mod tests {
         assert_eq!(parsed.source_format_version, CURRENT_FORMAT_VERSION);
         assert!(!parsed.from_newer_version);
         // Folder links expressed by name.
-        let water = parsed.export.folders.iter().find(|f| f.name == "Water").unwrap();
+        let water = parsed
+            .export
+            .folders
+            .iter()
+            .find(|f| f.name == "Water")
+            .unwrap();
         assert_eq!(water.parent.as_deref(), Some("Survival"));
         // Bookmark links expressed by folder name; note + title preserved.
         let wp = parsed
@@ -389,8 +397,7 @@ mod tests {
     #[test]
     fn parse_tolerates_missing_app_and_kind() {
         // A minimal/hand-authored file with just the version and a bookmark.
-        let parsed =
-            parse(r#"{"format_version": 1, "bookmarks": [{"title": "Photon"}]}"#).unwrap();
+        let parsed = parse(r#"{"format_version": 1, "bookmarks": [{"title": "Photon"}]}"#).unwrap();
         assert_eq!(parsed.export.bookmarks.len(), 1);
         assert_eq!(parsed.export.bookmarks[0].title, "Photon");
         // Missing folder/note default cleanly.

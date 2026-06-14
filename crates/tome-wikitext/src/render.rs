@@ -688,11 +688,7 @@ fn named_param(parameters: &[Parameter<'_>], key: &str) -> Option<String> {
             return None;
         }
         let value = collect_param_text(&param.value);
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     })
 }
 
@@ -876,13 +872,17 @@ mod tests {
 
     #[test]
     fn infobox_renders_named_params_as_rows_and_skips_positional() {
-        let out = render("{{Infobox person|positional junk|name=Ada Lovelace|occupation=Mathematician}}");
+        let out =
+            render("{{Infobox person|positional junk|name=Ada Lovelace|occupation=Mathematician}}");
         assert!(out.contains("<div class=\"tome-infobox\">"), "got: {out}");
         assert!(
             out.contains("<div class=\"tome-infobox-title\">Infobox person</div>"),
             "got: {out}"
         );
-        assert!(out.contains("<table class=\"tome-infobox-params\">"), "got: {out}");
+        assert!(
+            out.contains("<table class=\"tome-infobox-params\">"),
+            "got: {out}"
+        );
         assert!(
             out.contains("<tr><th>name</th><td>Ada Lovelace</td></tr>"),
             "got: {out}"
@@ -911,7 +911,10 @@ mod tests {
     #[test]
     fn infobox_closes_open_paragraph_before_block() {
         let out = render("Intro text {{Infobox star|name=Sol}} trailing text.");
-        assert!(out.contains("</p><div class=\"tome-infobox\">"), "got: {out}");
+        assert!(
+            out.contains("</p><div class=\"tome-infobox\">"),
+            "got: {out}"
+        );
     }
 
     #[test]

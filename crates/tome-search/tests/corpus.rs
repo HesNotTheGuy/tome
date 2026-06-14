@@ -215,7 +215,9 @@ fn fuzzy_fallback_respects_tier_filter() {
     let idx = build_corpus();
     // Photon is Hot. With a Warm/Cold filter, the fuzzy match must be
     // suppressed too.
-    let hits = idx.search("phopton", 10, &[Tier::Warm, Tier::Cold]).unwrap();
+    let hits = idx
+        .search("phopton", 10, &[Tier::Warm, Tier::Cold])
+        .unwrap();
     assert!(
         hits.iter().all(|h| h.title != "Photon"),
         "fuzzy hit leaked through tier filter"

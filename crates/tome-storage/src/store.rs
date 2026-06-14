@@ -2233,7 +2233,10 @@ mod tests {
     fn import_into_empty_creates_folders_and_bookmarks() {
         let store = SqliteArticleStore::open_in_memory().unwrap();
         let folders = vec![ifolder("Survival", None)];
-        let bookmarks = vec![ibm("Water purification", Some("Survival")), ibm("Photon", None)];
+        let bookmarks = vec![
+            ibm("Water purification", Some("Survival")),
+            ibm("Photon", None),
+        ];
         let out = store.import_bookmarks(&folders, &bookmarks, false).unwrap();
         assert_eq!(out.folders_created, 1);
         assert_eq!(out.bookmarks_added, 2);
@@ -2267,7 +2270,11 @@ mod tests {
         store.create_folder("Survival", None).unwrap();
         // Backup names the folder with different casing; must merge, not dup.
         let out = store
-            .import_bookmarks(&[ifolder("SURVIVAL", None)], &[ibm("Fire", Some("survival"))], false)
+            .import_bookmarks(
+                &[ifolder("SURVIVAL", None)],
+                &[ibm("Fire", Some("survival"))],
+                false,
+            )
             .unwrap();
         assert_eq!(out.folders_created, 0);
         assert_eq!(out.folders_matched, 1);
@@ -2282,7 +2289,11 @@ mod tests {
         let old = store.create_folder("Old", None).unwrap();
         store.add_bookmark("Stale", Some(old), None).unwrap();
         let out = store
-            .import_bookmarks(&[ifolder("Fresh", None)], &[ibm("New", Some("Fresh"))], true)
+            .import_bookmarks(
+                &[ifolder("Fresh", None)],
+                &[ibm("New", Some("Fresh"))],
+                true,
+            )
             .unwrap();
         assert_eq!(out.bookmarks_added, 1);
         assert_eq!(store.count_bookmarks().unwrap(), 1);
@@ -2343,7 +2354,9 @@ mod tests {
             .upsert_metadata(&cold_meta(2, "United Kingdom", 200))
             .unwrap();
         store.upsert_metadata(&cold_meta(3, "United", 300)).unwrap();
-        store.upsert_metadata(&cold_meta(4, "Uruguay", 400)).unwrap();
+        store
+            .upsert_metadata(&cold_meta(4, "Uruguay", 400))
+            .unwrap();
         // Lower-case query must still match the title-case rows, and the
         // shortest title (the most likely completion) must come first.
         let titles = store.titles_with_prefix("united", 10).unwrap();
@@ -2379,7 +2392,9 @@ mod tests {
     #[test]
     fn titles_with_prefix_excludes_evicted() {
         let store = SqliteArticleStore::open_in_memory().unwrap();
-        store.upsert_metadata(&cold_meta(1, "Volcano", 100)).unwrap();
+        store
+            .upsert_metadata(&cold_meta(1, "Volcano", 100))
+            .unwrap();
         store
             .upsert_metadata(&meta(2, "Voltage", Tier::Evicted))
             .unwrap();

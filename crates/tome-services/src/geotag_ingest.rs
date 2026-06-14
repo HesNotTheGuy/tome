@@ -99,7 +99,11 @@ fn parse_buf<F: FnMut(Geotag)>(buf: &[u8], eof: bool, on_geotag: &mut F) -> (u64
         let Some(rel) = find_subslice(&buf[pos..], prefix) else {
             // No further prefix. Retain a possible partial prefix at the tail
             // so a prefix split across the boundary still matches next time.
-            let keep = if eof { 0 } else { prefix_tail_overlap(buf, prefix) };
+            let keep = if eof {
+                0
+            } else {
+                prefix_tail_overlap(buf, prefix)
+            };
             return (count, buf.len() - keep);
         };
         let stmt_start = pos + rel;

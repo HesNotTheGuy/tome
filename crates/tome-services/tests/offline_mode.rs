@@ -47,7 +47,10 @@ fn offline_mode_toggles_kill_switch_and_persists() {
     // Turning it on engages the kill switch AND persists the flag.
     tome.set_offline_mode(true).unwrap();
     assert!(tome.offline_mode());
-    assert!(tome.kill_switch_engaged(), "offline mode must engage the kill switch");
+    assert!(
+        tome.kill_switch_engaged(),
+        "offline mode must engage the kill switch"
+    );
 
     // Turning it off reverses both.
     tome.set_offline_mode(false).unwrap();
@@ -67,7 +70,10 @@ fn offline_machine_comes_back_up_offline() {
     // switch is in-memory so it starts disengaged — until startup re-applies
     // the persisted flag.
     let restarted = tome_in(dir.path());
-    assert!(restarted.offline_mode(), "the persisted flag survives restart");
+    assert!(
+        restarted.offline_mode(),
+        "the persisted flag survives restart"
+    );
     assert!(
         !restarted.kill_switch_engaged(),
         "kill switch is in-memory; not engaged until startup applies the flag"

@@ -294,11 +294,7 @@ impl Tome {
             // richer Parsoid HTML; if not, we drop straight to the local
             // render. (The "not in store" path above still uses the full
             // retry budget because it has no fallback.)
-            match self
-                .api
-                .fetch_html_single_attempt(title, revision_id)
-                .await
-            {
+            match self.api.fetch_html_single_attempt(title, revision_id).await {
                 Ok(html) => {
                     return Ok(ArticleResponse {
                         title: title.to_string(),
@@ -739,7 +735,9 @@ impl Tome {
             .map_err(|e| TomeError::Other(format!("read backup {src:?}: {e}")))?;
         let parsed = crate::bookmark_export::parse(&text)?;
         let (folders, bookmarks) = parsed.export.into_storage();
-        let outcome = self.storage.import_bookmarks(&folders, &bookmarks, replace)?;
+        let outcome = self
+            .storage
+            .import_bookmarks(&folders, &bookmarks, replace)?;
         Ok(crate::bookmark_export::ImportSummary {
             folders_created: outcome.folders_created,
             folders_matched: outcome.folders_matched,
