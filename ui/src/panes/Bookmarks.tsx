@@ -27,6 +27,12 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
   const [folders, setFolders] = useState<BookmarkFolder[]>([]);
   const [activeFolder, setActiveFolder] = useState<"all" | number | null>("all");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  // Article count per group key (folder id, or "unfiled" for root), plus the
+  // grand total — drives the "watch a category fill up" badges in the sidebar.
+  const [counts, setCounts] = useState<Map<number | "unfiled", number>>(
+    new Map(),
+  );
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,15 +42,25 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
       return;
     }
     setLoading(true);
-    Promise.all([
-      tome.listFolders(),
-      activeFolder === "all"
-        ? tome.allBookmarks(500)
-        : tome.bookmarksInFolder(activeFolder, 500),
-    ])
-      .then(([fs, bs]) => {
+    // One fetch of every bookmark: the displayed list is just a client-side
+    // filter of it, and the per-group counts a tally — no second round trip.
+    Promise.all([tome.listFolders(), tome.allBookmarks(100000)])
+      .then(([fs, all]) => {
         setFolders(fs);
-        setBookmarks(bs);
+        const list =
+          activeFolder === "all"
+            ? all
+            : activeFolder === null
+              ? all.filter((b) => b.folder_id == null)
+              : all.filter((b) => b.folder_id === activeFolder);
+        setBookmarks(list);
+        const c = new Map<number | "unfiled", number>();
+        for (const b of all) {
+          const k = b.folder_id ?? "unfiled";
+          c.set(k, (c.get(k) ?? 0) + 1);
+        }
+        setCounts(c);
+        setTotal(all.length);
         setError(null);
       })
       .catch((e) => setError(String(e)))
@@ -137,11 +153,13 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
         <ul className="p-2">
           <FolderRow
             label="All bookmarks"
+            count={total}
             active={activeFolder === "all"}
             onClick={() => setActiveFolder("all")}
           />
           <FolderRow
             label="Unfiled"
+            count={counts.get("unfiled") ?? 0}
             active={activeFolder === null}
             onClick={() => setActiveFolder(null)}
           />
@@ -150,6 +168,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
             <FolderRow
               key={f.id}
               label={f.name}
+              count={counts.get(f.id) ?? 0}
               active={activeFolder === f.id}
               onClick={() => setActiveFolder(f.id)}
               onRename={() => rename(f)}
@@ -410,12 +429,14 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
 
 function FolderRow({
   label,
+  count,
   active,
   onClick,
   onRename,
   onDelete,
 }: {
   label: string;
+  count?: number;
   active: boolean;
   onClick: () => void;
   onRename?: () => void;
@@ -431,9 +452,14 @@ function FolderRow({
           : "text-tome-muted hover:bg-tome-surface-2 hover:text-tome-text")
       }
     >
-      <span className="truncate">{label}</span>
+      <span className="truncate flex-1">{label}</span>
+      {count !== undefined && (
+        <span className="text-xs text-tome-muted tabular-nums shrink-0">
+          {count}
+        </span>
+      )}
       {(onRename || onDelete) && (
-        <span className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs">
+        <span className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs shrink-0">
           {onRename && (
             <button
               type="button"

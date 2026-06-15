@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { usePrompt } from "./Dialog";
 import { tome } from "../service";
 import { BookmarkFolder, isTauri } from "../types";
 
@@ -7,66 +8,92 @@ interface BookmarkButtonProps {
   articleTitle: string;
 }
 
+/** Sentinel folder key for the root ("Unfiled") group. */
+type FolderKey = number | "unfiled";
+
 /**
- * Star button shown next to the article title in the Reader. Click to
- * bookmark; click again to unbookmark. The dropdown lets the user pick
- * a folder (or default to unfiled). Folder list refreshes lazily on open.
+ * Star button next to the article title in the Reader. Clicking opens a
+ * "Save to" menu listing every group with a checkmark for the ones this
+ * article is already in — so you can drop the current article into a
+ * category (or several) and watch that category fill up as you read.
+ *
+ * "➕ New group…" creates a folder and saves into it without leaving the
+ * article, which is the whole point: start a fresh category mid-read and
+ * grow it. The same article can live in multiple groups.
  */
 export default function BookmarkButton({ articleTitle }: BookmarkButtonProps) {
-  const [bookmarked, setBookmarked] = useState<boolean>(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const prompt = usePrompt();
   const [folders, setFolders] = useState<BookmarkFolder[]>([]);
+  // folder key -> the bookmark row id, for the groups this article is in.
+  const [placements, setPlacements] = useState<Map<FolderKey, number>>(
+    new Map(),
+  );
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const saved = placements.size > 0;
+
+  async function refresh() {
     if (!isTauri() || !articleTitle) return;
-    tome
-      .isBookmarked(articleTitle)
-      .then(setBookmarked)
-      .catch(() => setBookmarked(false));
+    try {
+      const [fs, all] = await Promise.all([
+        tome.listFolders(),
+        tome.allBookmarks(100000),
+      ]);
+      setFolders(fs);
+      const map = new Map<FolderKey, number>();
+      for (const b of all) {
+        if (b.article_title === articleTitle) {
+          map.set(b.folder_id ?? "unfiled", b.id);
+        }
+      }
+      setPlacements(map);
+    } catch {
+      // Best-effort — the button isn't load-bearing.
+    }
+  }
+
+  // Reflect saved state when the article changes (cheap: just the count).
+  useEffect(() => {
+    if (!isTauri() || !articleTitle) {
+      setPlacements(new Map());
+      return;
+    }
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [articleTitle]);
 
-  async function loadFolders() {
-    if (!isTauri()) return;
+  async function toggle(key: FolderKey) {
+    if (busy) return;
+    setBusy(true);
     try {
-      const fs = await tome.listFolders();
-      setFolders(fs);
-    } catch {
-      setFolders([]);
-    }
-  }
-
-  async function quickToggle() {
-    if (!isTauri() || !articleTitle) return;
-    if (bookmarked) {
-      // Toggle off: find the bookmark(s) for this title and remove them
-      // all. We don't currently have a "remove by title" facade — list
-      // and delete each.
-      try {
-        const all = await tome.allBookmarks(1000);
-        for (const b of all) {
-          if (b.article_title === articleTitle) {
-            await tome.removeBookmark(b.id);
-          }
-        }
-        setBookmarked(false);
-      } catch {
-        // best-effort
+      const existing = placements.get(key);
+      if (existing !== undefined) {
+        await tome.removeBookmark(existing);
+      } else {
+        const folderId = key === "unfiled" ? null : key;
+        await tome.addBookmark(articleTitle, folderId, null);
       }
-    } else {
-      // Open the folder picker so the user can choose where to save.
-      await loadFolders();
-      setPickerOpen(true);
-    }
-  }
-
-  async function saveTo(folderId: number | null) {
-    setPickerOpen(false);
-    if (!isTauri() || !articleTitle) return;
-    try {
-      await tome.addBookmark(articleTitle, folderId, null);
-      setBookmarked(true);
+      await refresh();
     } catch {
       // best-effort
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function newGroup() {
+    const name = (await prompt({ title: "New group", placeholder: "e.g. Survival skills" }))?.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const id = await tome.createFolder(name, null);
+      await tome.addBookmark(articleTitle, id, null);
+      await refresh();
+    } catch {
+      // best-effort
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -76,54 +103,82 @@ export default function BookmarkButton({ articleTitle }: BookmarkButtonProps) {
     <div className="relative inline-block">
       <button
         type="button"
-        onClick={quickToggle}
-        title={bookmarked ? "Remove bookmark" : "Bookmark this article"}
-        aria-label={bookmarked ? "Remove bookmark" : "Bookmark"}
+        onClick={() => {
+          if (!open) refresh();
+          setOpen((v) => !v);
+        }}
+        disabled={!isTauri()}
+        title={saved ? "Saved — manage groups" : "Save to a group"}
+        aria-label={saved ? "Saved — manage groups" : "Save to a group"}
         className={
           "px-2 py-1 text-base rounded transition-colors " +
-          (bookmarked
+          (saved
             ? "text-yellow-500 hover:text-yellow-600"
             : "text-tome-muted hover:text-tome-text hover:bg-tome-surface-2")
         }
       >
-        {bookmarked ? "★" : "☆"}
+        {saved ? "★" : "☆"}
       </button>
 
-      {pickerOpen && (
+      {open && (
         <div
-          className="absolute right-0 top-full mt-1 w-56 max-h-64 overflow-auto rounded-lg border border-tome-border bg-tome-surface shadow-lg z-30"
-          onMouseLeave={() => setPickerOpen(false)}
+          className="absolute right-0 top-full mt-1 w-60 max-h-72 overflow-auto rounded-lg border border-tome-border bg-tome-surface shadow-lg z-30"
+          onMouseLeave={() => setOpen(false)}
         >
           <div className="px-3 py-2 border-b border-tome-border text-xs uppercase tracking-wide text-tome-muted">
-            Save to
+            Save to group
           </div>
           <ul className="divide-y divide-tome-border">
-            <li
-              onClick={() => saveTo(null)}
-              className="px-3 py-2 text-sm cursor-pointer hover:bg-tome-surface-2"
-            >
-              <span className="text-tome-muted">📂 </span>Unfiled
-            </li>
+            <GroupRow
+              label="Unfiled"
+              icon="📂"
+              checked={placements.has("unfiled")}
+              onClick={() => toggle("unfiled")}
+            />
             {folders.map((f) => (
-              <li
+              <GroupRow
                 key={f.id}
-                onClick={() => saveTo(f.id)}
-                className="px-3 py-2 text-sm cursor-pointer hover:bg-tome-surface-2 truncate"
-                title={f.name}
-              >
-                <span className="text-tome-muted">📁 </span>
-                {f.name}
-              </li>
+                label={f.name}
+                icon="📁"
+                checked={placements.has(f.id)}
+                onClick={() => toggle(f.id)}
+              />
             ))}
-            {folders.length === 0 && (
-              <li className="px-3 py-2 text-xs text-tome-muted italic">
-                No folders yet. Save unfiled, or create folders in the
-                Bookmarks pane.
-              </li>
-            )}
           </ul>
+          <button
+            type="button"
+            onClick={newGroup}
+            disabled={busy}
+            className="w-full text-left px-3 py-2 text-sm border-t border-tome-border text-tome-link hover:bg-tome-surface-2 disabled:opacity-50"
+          >
+            ➕ New group…
+          </button>
         </div>
       )}
     </div>
+  );
+}
+
+function GroupRow({
+  label,
+  icon,
+  checked,
+  onClick,
+}: {
+  label: string;
+  icon: string;
+  checked: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <li
+      onClick={onClick}
+      className="px-3 py-2 text-sm cursor-pointer hover:bg-tome-surface-2 flex items-center gap-2"
+      title={label}
+    >
+      <span className="w-4 text-tome-success">{checked ? "✓" : ""}</span>
+      <span className="text-tome-muted">{icon}</span>
+      <span className="truncate flex-1">{label}</span>
+    </li>
   );
 }
