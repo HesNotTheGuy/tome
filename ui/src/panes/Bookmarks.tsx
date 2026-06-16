@@ -73,7 +73,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
   }, [activeFolder]);
 
   async function newFolder() {
-    const name = (await prompt({ title: "Folder name" }))?.trim();
+    const name = (await prompt({ title: "Group name" }))?.trim();
     if (!name) return;
     try {
       await tome.createFolder(name, null);
@@ -85,7 +85,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
 
   async function rename(folder: BookmarkFolder) {
     const name = (
-      await prompt({ title: "Rename folder", defaultValue: folder.name })
+      await prompt({ title: "Rename group", defaultValue: folder.name })
     )?.trim();
     if (!name || name === folder.name) return;
     try {
@@ -99,7 +99,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
   async function removeFolder(folder: BookmarkFolder) {
     if (
       !(await confirm({
-        message: `Delete folder "${folder.name}"? Bookmarks inside it will become unfiled.`,
+        message: `Delete group "${folder.name}"? Bookmarks inside it become unfiled.`,
         danger: true,
       }))
     ) {
@@ -138,13 +138,13 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
       <aside className="w-64 shrink-0 border-r border-tome-border bg-tome-surface overflow-y-auto">
         <div className="p-3 border-b border-tome-border flex items-center justify-between">
           <h2 className="text-sm font-bold uppercase tracking-wide text-tome-muted">
-            Folders
+            Groups
           </h2>
           <button
             type="button"
             onClick={newFolder}
             disabled={!isTauri()}
-            title="New folder"
+            title="New group"
             className="text-tome-muted hover:text-tome-text disabled:opacity-50"
           >
             +
@@ -186,7 +186,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
               ? "All bookmarks"
               : activeFolder === null
                 ? "Unfiled"
-                : folders.find((f) => f.id === activeFolder)?.name ?? "Folder"}
+                : folders.find((f) => f.id === activeFolder)?.name ?? "Group"}
           </h2>
 
           <BackupSection onChanged={refresh} />
@@ -241,7 +241,7 @@ export default function Bookmarks({ onOpen }: BookmarksProps) {
                       )
                     }
                     className="text-xs px-1 py-0.5 rounded border border-tome-border bg-tome-bg"
-                    title="Move to folder"
+                    title="Move to group"
                   >
                     <option value="">(unfiled)</option>
                     {folders.map((f) => (
@@ -294,7 +294,7 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
     setMsg(null);
     try {
       const s = await tome.exportBookmarks(exportPath.trim());
-      setMsg(`Saved ${s.bookmarks} bookmark(s) and ${s.folders} folder(s) → ${s.path}`);
+      setMsg(`Saved ${s.bookmarks} bookmark(s) and ${s.folders} group(s) → ${s.path}`);
       setExportPath("");
     } catch (e) {
       setErr(String(e));
@@ -312,7 +312,7 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
       replace &&
       !(await confirm({
         message:
-          "Replace ALL current bookmarks and folders with this backup? This cannot be undone.",
+          "Replace ALL current bookmarks and groups with this backup? This cannot be undone.",
         danger: true,
       }))
     ) {
@@ -325,7 +325,7 @@ function BackupSection({ onChanged }: { onChanged: () => void }) {
       const s = await tome.importBookmarks(importPath.trim(), replace);
       let m = `Added ${s.bookmarks_added} bookmark(s)`;
       if (s.bookmarks_skipped > 0) m += ` (${s.bookmarks_skipped} already present)`;
-      m += `, ${s.folders_created} new folder(s).`;
+      m += `, ${s.folders_created} new group(s).`;
       if (s.from_newer_version) {
         m +=
           " Note: this backup was made by a newer version of Tome — imported everything this version understands.";
